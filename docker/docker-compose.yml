@@ -1,0 +1,31 @@
+# Optional static compose file for manual use.
+# The pix CLI generates a temporary compose file at runtime with the
+# current working directory bound to /workspace and the configured
+# environment allowlist applied.
+#
+# To mount the host ~/.pi/agent directory instead of a named volume,
+# replace the "pi-agent-home" volume line with:
+#   - ~/.pi/agent:/root/.pi/agent
+# and remove the top-level "volumes:" section.
+
+services:
+  pi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pix-pi-sandbox
+    stdin_open: true
+    tty: true
+    environment:
+      - ANTHROPIC_API_KEY
+      - ANTHROPIC_BASE_URL
+      - OPENAI_API_KEY
+      - OPENAI_BASE_URL
+    volumes:
+      - ${PWD:-.}:/workspace
+      - pi-agent-home:/root/.pi/agent
+    working_dir: /workspace
+    entrypoint: ["pi"]
+
+volumes:
+  pi-agent-home:

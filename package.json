@@ -1,0 +1,27 @@
+{
+  "name": "@reiutsuho/pix",
+  "version": "0.1.0",
+  "description": "A local wrapper that launches pi-coding-agent inside an auto-created Docker context/runtime.",
+  "main": "bin/pix.js",
+  "bin": {
+    "pix": "bin/pix.js"
+  },
+  "files": [
+    "bin/",
+    "docker/"
+  ],
+  "scripts": {
+    "test": "node bin/pix.js --help"
+  },
+  "keywords": [
+    "pi-coding-agent",
+    "docker",
+    "cli",
+    "wrapper"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
