@@ -8,6 +8,7 @@ A local CLI wrapper that launches [`@earendil-works/pi-coding-agent`](https://ww
 - **Sandboxed runtime**: Runs `pi` inside a container with the official Node.js + tooling image.
 - **Host workspace mount**: Mounts the current directory into `/workspace` so file edits apply directly to your project.
 - **Host `~/.pi` mount**: Mounts your host `~/.pi` directory into the container's `/root/.pi` by default, so `pi` can read your existing auth/session files without extra environment variables.
+- **Daemon mode**: Keep a `pi` container running in the background and attach to it instantly on subsequent runs, avoiding the cold-start delay.
 - **Environment allowlist**: Forwards only the environment variables you configure, with an opt-in `--env-all` override.
 
 ## Requirements
@@ -50,12 +51,37 @@ pix
 | `--rebuild` | Force rebuild the Docker image before running. |
 | `--env-all` | Forward **all** environment variables into the container. |
 | `--dry-run` | Print the Docker command and generated compose file instead of executing it. |
+| `--daemon` | Run `pi` in a background daemon container. Reuses the same container on the next run, so startup is instant. |
 
 Any other arguments are passed through to `pi`:
 
 ```bash
 pix --help
 pix --some-pi-flag
+```
+
+### Daemon mode
+
+`pi` can take a while to initialize when loading many extensions or scanning large workspaces. Use `--daemon` to keep a container running in the background:
+
+```bash
+# First run: creates and starts the daemon container
+pix --daemon
+
+# Later runs: attach to the already-running container instantly
+pix --daemon
+```
+
+The daemon container is named `pix-<context>-pi-daemon` (e.g. `pix-pi-local-pi-daemon`). To stop it:
+
+```bash
+docker --context pi-local stop pix-pi-local-pi-daemon
+```
+
+To remove it:
+
+```bash
+docker --context pi-local rm pix-pi-local-pi-daemon
 ```
 
 ## Configuration
@@ -126,7 +152,8 @@ The default host path is `~/.pi` (resolved to the current user's home directory)
 5. Generates a temporary `docker-compose.yml` with:
    - Current directory mounted to `/workspace`
    - Host `~/.pi` mounted to `/root/.pi`
-6. Runs `docker --context <context> compose run --rm pi <args>`.
+6. In normal mode: runs `docker --context <context> compose run --rm pi <args>`.
+7. In daemon mode: runs `docker --context <context> compose up -d pi`, then attaches via `docker exec`.
 
 ## License
 
