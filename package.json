@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "A Windows CLI launcher for @earendil-works/pi-coding-agent that runs Pi inside WSL2 and an optional Docker sandbox, sharing a single canonical runtime.",
   "main": "bin/pix.js",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "pix": "bin/pix.js"
   },
