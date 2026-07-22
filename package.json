@@ -1,14 +1,15 @@
 {
   "name": "@reiutsuho/pix",
   "version": "0.1.0",
-  "description": "A local wrapper that launches pi-coding-agent inside an auto-created Docker context/runtime.",
+  "description": "A Windows CLI launcher for @earendil-works/pi-coding-agent that runs Pi inside WSL2 and an optional Docker sandbox, sharing a single canonical runtime.",
   "main": "bin/pix.js",
   "bin": {
     "pix": "bin/pix.js"
   },
   "files": [
     "bin/",
-    "docker/"
+    "docker/",
+    "src/"
   ],
   "scripts": {
     "test": "node bin/pix.js --help"

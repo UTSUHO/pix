@@ -7,3 +7,7 @@ yarn-error.log*
 .vscode/
 .idea/
 *.tgz
+node-image.tar
+spawn-output.txt
+status-output.txt
+.claude/

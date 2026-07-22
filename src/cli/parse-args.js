@@ -1,0 +1,61 @@
+function parseArgs(argv) {
+  const result = {
+    command: 'run',
+    execution: null,
+    dryRun: false,
+    rebuild: false,
+    envAll: false,
+    distro: null,
+    help: false,
+    source: null,
+    winUser: null,
+    includeExtensions: false,
+    shell: null,
+    piArgs: [],
+  };
+
+  const KNOWN_COMMANDS = new Set(['status', 'doctor', 'migrate', 'install-shell-env']);
+
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i];
+
+    if (arg === '--direct') {
+      result.execution = 'direct';
+    } else if (arg === '--sandbox') {
+      result.execution = 'sandbox';
+    } else if (arg === '--dry-run') {
+      result.dryRun = true;
+    } else if (arg === '--rebuild') {
+      result.rebuild = true;
+    } else if (arg === '--env-all') {
+      result.envAll = true;
+    } else if (arg === '--include-extensions') {
+      result.includeExtensions = true;
+    } else if (arg === '--distro') {
+      i += 1;
+      result.distro = argv[i];
+    } else if (arg === '--source') {
+      i += 1;
+      result.source = argv[i];
+    } else if (arg === '--win-user') {
+      i += 1;
+      result.winUser = argv[i];
+    } else if (arg === '--shell') {
+      i += 1;
+      result.shell = argv[i];
+    } else if (arg === '--help' || arg === '-h') {
+      result.help = true;
+    } else if (result.command === 'run' && !result.piArgs.length && KNOWN_COMMANDS.has(arg)) {
+      result.command = arg;
+    } else {
+      result.piArgs.push(arg);
+    }
+
+    i += 1;
+  }
+
+  return result;
+}
+
+module.exports = { parseArgs };

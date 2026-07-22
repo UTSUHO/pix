@@ -1,12 +1,9 @@
-# Optional static compose file for manual use.
-# The pix CLI generates a temporary compose file at runtime with the
-# current working directory bound to /workspace and the configured
-# environment allowlist applied.
+# Optional static compose file for manual debugging.
+# The pix CLI does not use this file directly; it generates docker run
+# commands from WSL using the shared pi runtime.
 #
-# To mount the host ~/.pi/agent directory instead of a named volume,
-# replace the "pi-agent-home" volume line with:
-#   - ~/.pi/agent:/root/.pi/agent
-# and remove the top-level "volumes:" section.
+# This example mounts the WSL canonical pi runtime into the container at
+# the same absolute path, so Direct and Sandbox modes share the same runtime.
 
 services:
   pi:
@@ -21,11 +18,9 @@ services:
       - ANTHROPIC_BASE_URL
       - OPENAI_API_KEY
       - OPENAI_BASE_URL
+      - PI_CODING_AGENT_DIR=/home/${USER:-user}/.pix/runtime/agent
     volumes:
       - ${PWD:-.}:/workspace
-      - pi-agent-home:/root/.pi/agent
+      - /home/${USER:-user}/.pix/runtime:/home/${USER:-user}/.pix/runtime
     working_dir: /workspace
     entrypoint: ["pi"]
-
-volumes:
-  pi-agent-home:

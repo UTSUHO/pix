@@ -1,57 +1,61 @@
 # @reiutsuho/pix
 
-A local CLI wrapper that launches [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) inside an automatically created Docker context/runtime.
+A Windows CLI launcher for [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) that runs Pi inside WSL2 and an optional Docker sandbox.
 
-## Features
-
-- **Docker context auto-creation**: Creates a dedicated Docker context (`pi-local` by default) on first run.
-- **Sandboxed runtime**: Runs `pi` inside a container with the official Node.js + tooling image.
-- **Host workspace mount**: Mounts the current directory into `/workspace` so file edits apply directly to your project.
-- **Host `~/.pi` mount**: Mounts your host `~/.pi` directory into the container's `/root/.pi` by default, so `pi` can read your existing auth/session files without extra environment variables.
-- **Daemon mode**: Keep a `pi` container running in the background and attach to it instantly on subsequent runs, avoiding the cold-start delay.
-- **Environment allowlist**: Forwards only the environment variables you configure, with an opt-in `--env-all` override.
+Pix is installed on Windows, but Pi itself runs in WSL. Both **Direct** (WSL) and **Sandbox** (Docker) modes share the same canonical Pi runtime at `~/.pix/runtime/agent` inside the WSL Linux filesystem. Windows `.pi` is no longer part of the active runtime; it is only used as a one-time migration source.
 
 ## Requirements
 
-- [Docker](https://docs.docker.com/get-docker/) installed and running
-- Node.js >= 18 (for the wrapper CLI)
+- Windows 10/11 with WSL2
+- A WSL distro with Node.js and `pi` installed (for Direct mode)
+- Docker Desktop with WSL integration enabled (for Sandbox mode)
 
 ## Installation
+
+Install Pix inside your WSL distro so that `node` and `pi` are available:
 
 ```bash
 npm install -g @reiutsuho/pix
 ```
 
-Or use with `npx`:
-
-```bash
-npx @reiutsuho/pix --help
-```
+You can also run it from Windows PowerShell/CMD; Pix will re-invoke itself inside WSL automatically.
 
 ## Usage
 
 ```bash
-# Run pi in Docker from any project directory
-# pi will read auth/session files from your host ~/.pi directory
 cd /path/to/project
 pix
 ```
 
-If you prefer to pass the API key via environment variable instead, set it in your shell:
+By default `pix` uses the execution policy from your configuration (`direct` if unset).
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-pix
-```
+### Commands
 
-### CLI options
+| Command | Description |
+|---------|-------------|
+| `pix` | Launch `pi` using the configured execution policy. |
+| `pix --direct` | Force Direct execution in WSL. |
+| `pix --sandbox` | Force Sandbox execution in Docker. |
+| `pix status` | Show execution policy, WSL distro, runtime path, workspace storage type, pi/Docker availability, and pi versions. |
+| `pix doctor` | Diagnose environment issues (WSL, Docker, NTFS paths, image, runtime mounts, version consistency, etc.). |
+| `pix migrate` | One-time migration from Windows `.pi/agent` to the WSL canonical runtime. |
+| `pix install-shell-env` | Add `PI_CODING_AGENT_DIR` to your shell rc file so plain `pi` uses the same runtime. |
+
+### Options
 
 | Option | Description |
 |--------|-------------|
-| `--rebuild` | Force rebuild the Docker image before running. |
-| `--env-all` | Forward **all** environment variables into the container. |
-| `--dry-run` | Print the Docker command and generated compose file instead of executing it. |
-| `--daemon` | Run `pi` in a background daemon container. Reuses the same container on the next run, so startup is instant. |
+| `--direct` | Force Direct execution. |
+| `--sandbox` | Force Sandbox execution. |
+| `--distro <name>` | Use a specific WSL distro. |
+| `--dry-run` | Print the command that would run instead of executing it. |
+| `--rebuild` | Force rebuild the sandbox Docker image. |
+| `--env-all` | Forward all environment variables into the container. |
+| `--source <path>` | Source `.pi/agent` directory for `migrate`. |
+| `--win-user <name>` | Windows username for auto-detecting the migrate source. |
+| `--include-extensions` | Migrate extension source during `migrate`. |
+| `--shell <shell>` | Shell for `install-shell-env` (`bash`, `zsh`, `fish`). |
+| `--help, -h` | Show help. |
 
 Any other arguments are passed through to `pi`:
 
@@ -60,100 +64,115 @@ pix --help
 pix --some-pi-flag
 ```
 
-### Daemon mode
-
-`pi` can take a while to initialize when loading many extensions or scanning large workspaces. Use `--daemon` to keep a container running in the background:
-
-```bash
-# First run: creates and starts the daemon container
-pix --daemon
-
-# Later runs: attach to the already-running container instantly
-pix --daemon
-```
-
-The daemon container is named `pix-<context>-pi-daemon` (e.g. `pix-pi-local-pi-daemon`). To stop it:
-
-```bash
-docker --context pi-local stop pix-pi-local-pi-daemon
-```
-
-To remove it:
-
-```bash
-docker --context pi-local rm pix-pi-local-pi-daemon
-```
-
 ## Configuration
 
-`pix` reads optional JSON config files. Project config overrides user config.
+Pix reads optional JSON config files. Project config overrides user config.
 
-- User config: `~/.pixrc.json`
+- User config: `~/.pixrc.json` (inside WSL, e.g. `/home/<user>/.pixrc.json`)
 - Project config: `.pix.json` in the current working directory
 
-Example `.pix.json`:
+Example `~/.pixrc.json`:
 
 ```json
 {
-  "contextName": "pi-local",
-  "imageName": "pix-pi-sandbox",
-  "apiKeyEnv": "ANTHROPIC_API_KEY",
-  "requireApiKey": false,
-  "useHostPiHome": true,
-  "piHomeHostPath": "~/.pi",
+  "wsl": {
+    "distro": "Ubuntu",
+    "runtimeRoot": "~/.pix/runtime"
+  },
+  "execution": "direct",
+  "container": {
+    "image": "pix-pi-sandbox",
+    "network": "bridge",
+    "workspaceAccess": "read-write",
+    "extraRunOptions": []
+  },
   "envAllowlist": [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "DEBUG"
-  ],
-  "extraEnv": {
-    "NODE_ENV": "development"
-  },
-  "extraRunOptions": ["--service-ports"]
+  ]
 }
 ```
 
-To use a Docker named volume for `/root/.pi` instead of mounting the host directory, set:
+Example `.pix.json` for a project that needs network isolation:
 
 ```json
 {
-  "useHostPiHome": false
+  "execution": "sandbox",
+  "container": {
+    "network": "none",
+    "workspaceAccess": "read-write"
+  }
 }
 ```
-
-The default host path is `~/.pi` (resolved to the current user's home directory). You can override it with `piHomeHostPath`.
 
 ### Config fields
 
 | Field | Description |
 |-------|-------------|
-| `contextName` | Name of the Docker context to create/use. Default: `pi-local`. |
-| `imageName` | Tag for the built sandbox image. Default: `pix-pi-sandbox`. |
-| `apiKeyEnv` | Environment variable treated as the required API key. Default: `ANTHROPIC_API_KEY`. |
-| `requireApiKey` | Whether to error if the API key env var is missing. Default: `false` when `useHostPiHome` is `true`, otherwise `true`. |
-| `envAllowlist` | List of environment variables forwarded into the container. |
-| `extraEnv` | Static extra environment variables injected into the container. |
-| `dockerfilePath` | Override the Dockerfile used to build the image. |
-| `useHostPiHome` | Mount host `~/.pi` into the container at `/root/.pi`. Default: `true`. |
-| `piHomeHostPath` | Host path to mount as `/root/.pi` when `useHostPiHome` is `true`. Default: `~/.pi`. |
-| `useHostAgentHome` | Legacy alias for `useHostPiHome`. |
-| `agentHomeHostPath` | Legacy alias for `piHomeHostPath`. |
-| `extraComposeOptions` | Extra options passed to `docker compose`. |
-| `extraRunOptions` | Extra options passed to `docker compose run`. |
+| `wsl.distro` | WSL distro to use. Default: default WSL distro. |
+| `wsl.runtimeRoot` | Parent directory of the canonical Pi runtime. Default: `~/.pix/runtime`. The agent dir is always `runtimeRoot/agent`. |
+| `execution` | Execution policy: `direct` or `sandbox`. Default: `direct`. |
+| `container.image` | Docker image tag for Sandbox. Default: `pix-pi-sandbox`. |
+| `container.network` | Docker network mode, e.g. `bridge`, `none`, `host`. Default: `bridge`. |
+| `container.workspaceAccess` | `read-write` or `read-only`. Default: `read-write`. |
+| `container.extraRunOptions` | Extra options passed to `docker run`. |
+| `envAllowlist` | Environment variables forwarded into the container. |
+
+### Precedence
+
+```text
+CLI flags > .pix.json > ~/.pixrc.json > defaults
+```
 
 ## How it works
 
-1. Checks that Docker is available.
-2. Loads config from `~/.pixrc.json` and `./.pix.json`.
-3. Creates the Docker context if it does not exist.
-4. Ensures the host `~/.pi` directory exists (when using host mount).
-5. Generates a temporary `docker-compose.yml` with:
-   - Current directory mounted to `/workspace`
-   - Host `~/.pi` mounted to `/root/.pi`
-6. In normal mode: runs `docker --context <context> compose run --rm pi <args>`.
-7. In daemon mode: runs `docker --context <context> compose up -d pi`, then attaches via `docker exec`.
+1. When invoked from Windows, Pix re-invokes itself inside WSL using `wsl.exe`.
+2. Inside WSL, Pix loads config, resolves the WSL distro, workspace path, and canonical Pi runtime.
+3. **Direct** mode runs `pi` in WSL directly, with `PI_CODING_AGENT_DIR` pointing at `~/.pix/runtime/agent`.
+4. **Sandbox** mode runs `docker run` from WSL, mounting:
+   - the project workspace to `/workspace`
+   - the canonical Pi runtime into the container at the same absolute path
+5. Sandbox sets `PI_CODING_AGENT_DIR` to the same path used by Direct mode, so both modes see the same configuration, auth, sessions, and extensions without copying files.
+
+## Running `pi` directly inside WSL
+
+Pix sets `PI_CODING_AGENT_DIR` when it launches `pi`, so Direct and Sandbox modes share the same runtime. If you also want to run `pi` directly in WSL (without typing `pix`), make sure the same environment variable is set:
+
+```bash
+pix install-shell-env
+source ~/.bashrc
+```
+
+This writes a guarded block into your shell rc file:
+
+```bash
+# >>> pix >>>
+export PI_CODING_AGENT_DIR="/home/<user>/.pix/runtime/agent"
+# <<< pix <<<
+```
+
+After that, plain `pi` in WSL uses the exact same runtime as `pix --direct` and `pix --sandbox`. Re-run `pix install-shell-env` to update the path if you change `wsl.runtimeRoot`.
+
+## Migration from Windows `.pi`
+
+If you previously used a Windows-native Pi installation with `C:\Users\<user>\.pi\agent`, run:
+
+```powershell
+pix migrate
+```
+
+This performs a one-time copy of portable data (settings, models, auth, sessions, skills, prompts, themes) into `/home/<wsl-user>/.pix/runtime/agent`. Platform-specific directories (`npm`, `git`, `node_modules`, `bin`, `tools`) and `trust.json` are skipped and should be rebuilt inside WSL.
+
+To also copy custom extension source, add `--include-extensions`.
+
+## Notes
+
+- Pix does not manage the contents of your Pi runtime, run `git pull`, or execute `pnpm install` automatically.
+- If your workspace or runtime is on Windows NTFS (`/mnt/c/...`), Pix will warn you because performance will be slower.
+- The old config keys `useHostPiHome`, `piHomeHostPath`, `useHostAgentHome`, `agentHomeHostPath`, `contextName`, `extraComposeOptions`, `imageName`, and `pi` are deprecated and ignored.
 
 ## License
 
