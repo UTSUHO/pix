@@ -43,11 +43,10 @@ function buildDockerArgs(workspace, agentDir, piArgs, config, options) {
   args.push('--mount', `type=bind,src=${agentDir},dst=${agentDir}`);
 
   const env = collectEnvVars(config, envAll);
+  env.PI_CODING_AGENT_DIR = agentDir;
   for (const [key, value] of Object.entries(env)) {
     args.push('--env', `${key}=${value}`);
   }
-
-  args.push('--env', `PI_CODING_AGENT_DIR=${agentDir}`);
 
   args.push(...extraRunOptions);
   args.push(imageName);

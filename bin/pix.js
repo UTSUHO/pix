@@ -28,6 +28,9 @@ Options:
   --dry-run                 Print the command that would run instead of executing it
   --rebuild                 Force rebuild the sandbox Docker image
   --env-all                 Forward all environment variables into the container
+  --no-projection           Disable workspace projection for this run
+  --mirror-back             Mirror projected workspace back to Windows source after exit (default)
+  --no-mirror-back          Disable mirror-back for this run
   --source <path>           Source .pi/agent directory for migrate
   --win-user <name>         Windows username for migrate source detection
   --include-extensions      Migrate extension source during migrate

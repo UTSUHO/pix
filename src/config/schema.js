@@ -33,6 +33,24 @@ function validateConfig(config) {
     errors.push('envAllowlist must be an array.');
   }
 
+  if (config.workspace) {
+    if (config.workspace.projection !== undefined && typeof config.workspace.projection !== 'boolean') {
+      errors.push('workspace.projection must be a boolean.');
+    }
+
+    if (config.workspace.projectionRoot !== undefined && typeof config.workspace.projectionRoot !== 'string') {
+      errors.push('workspace.projectionRoot must be a string.');
+    }
+
+    if (config.workspace.mirrorBack !== undefined && typeof config.workspace.mirrorBack !== 'boolean') {
+      errors.push('workspace.mirrorBack must be a boolean.');
+    }
+
+    if (config.workspace.exclude !== undefined && !Array.isArray(config.workspace.exclude)) {
+      errors.push('workspace.exclude must be an array.');
+    }
+  }
+
   if (!config.wsl || !config.wsl.distro) {
     warnings.push('No WSL distro configured. Pix will use the default WSL distro.');
   }

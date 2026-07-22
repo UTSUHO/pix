@@ -5,6 +5,11 @@ const { validateConfig } = require('../../config/schema');
 const { getDefaultDistro, hasCommand } = require('../../platform/wsl');
 const { isNtfsWorkspace } = require('../../platform/paths');
 const { resolveAgentDir } = require('../../runtime/resolve-runtime');
+const {
+  isProjectionNeeded,
+  projectWorkspace,
+  mirrorBackWorkspace,
+} = require('../../workspace/projection');
 const { log, warn, fatal } = require('../output');
 const directExecutor = require('../../executors/direct-executor');
 const sandboxExecutor = require('../../executors/sandbox-executor');
@@ -25,11 +30,24 @@ function applyCliOverrides(config, parsedArgs) {
     config.wsl = config.wsl || {};
     config.wsl.distro = parsedArgs.distro;
   }
+  if (parsedArgs.noProjection) {
+    config.workspace = config.workspace || {};
+    config.workspace.projection = false;
+  }
+  if (parsedArgs.mirrorBack) {
+    config.workspace = config.workspace || {};
+    config.workspace.mirrorBack = true;
+  }
+
+  if (parsedArgs.noMirrorBack) {
+    config.workspace = config.workspace || {};
+    config.workspace.mirrorBack = false;
+  }
 }
 
 async function execute(parsedArgs) {
-  const cwd = process.cwd();
-  const configs = loadConfig(cwd);
+  const sourceWorkspace = process.cwd();
+  const configs = loadConfig(sourceWorkspace);
   const { config, warnings } = mergeConfig(configs);
   applyCliOverrides(config, parsedArgs);
 
@@ -52,14 +70,7 @@ async function execute(parsedArgs) {
     fatal('Could not determine WSL distro. Set wsl.distro in ~/.pixrc.json or use --distro.');
   }
 
-  const workspace = cwd;
   const agentDir = resolveAgentDir(config);
-
-  if (isNtfsWorkspace(workspace)) {
-    warn('Workspace is stored on Windows NTFS.');
-    warn('Sandbox file operations may be slower.');
-    warn('Recommended: move the repository under /home/<user>/projects.');
-  }
 
   if (isNtfsWorkspace(agentDir)) {
     warn('Pi runtime is stored on Windows NTFS.');
@@ -69,26 +80,57 @@ async function execute(parsedArgs) {
 
   ensureRuntimeDir(agentDir);
 
+  let effectiveWorkspace = sourceWorkspace;
+  const projectionNeeded = isProjectionNeeded(sourceWorkspace, config);
+
+  if (projectionNeeded) {
+    try {
+      effectiveWorkspace = projectWorkspace(sourceWorkspace, config, {
+        dryRun: parsedArgs.dryRun,
+      });
+    } catch (err) {
+      warn(`Failed to project workspace: ${err.message}`);
+      warn('Falling back to the original Windows path.');
+      effectiveWorkspace = sourceWorkspace;
+    }
+  } else if (isNtfsWorkspace(sourceWorkspace)) {
+    warn('Workspace is stored on Windows NTFS and projection is disabled.');
+    warn('Sandbox file operations may be slower.');
+    warn('Recommended: enable workspace.projection or move the repository under /home/<user>/projects.');
+  }
+
   const execution = config.execution;
 
-  if (execution === 'direct') {
-    if (!hasCommand('pi', distro)) {
-      fatal('pi is not installed in WSL. Install it before using --direct.');
+  try {
+    if (execution === 'direct') {
+      if (!hasCommand('pi', distro)) {
+        fatal('pi is not installed in WSL. Install it before using --direct.');
+      }
+      return await directExecutor.execute(effectiveWorkspace, agentDir, parsedArgs.piArgs, {
+        dryRun: parsedArgs.dryRun,
+      });
     }
-    return directExecutor.execute(workspace, agentDir, parsedArgs.piArgs, {
-      dryRun: parsedArgs.dryRun,
-    });
-  }
 
-  if (execution === 'sandbox') {
-    return sandboxExecutor.execute(workspace, agentDir, parsedArgs.piArgs, config, {
-      dryRun: parsedArgs.dryRun,
-      rebuild: parsedArgs.rebuild,
-      envAll: parsedArgs.envAll,
-    });
-  }
+    if (execution === 'sandbox') {
+      return await sandboxExecutor.execute(effectiveWorkspace, agentDir, parsedArgs.piArgs, config, {
+        dryRun: parsedArgs.dryRun,
+        rebuild: parsedArgs.rebuild,
+        envAll: parsedArgs.envAll,
+      });
+    }
 
-  fatal(`Unknown execution policy: ${execution}`);
+    fatal(`Unknown execution policy: ${execution}`);
+  } finally {
+    if (projectionNeeded && effectiveWorkspace !== sourceWorkspace && config.workspace?.mirrorBack) {
+      try {
+        mirrorBackWorkspace(effectiveWorkspace, sourceWorkspace, config, {
+          dryRun: parsedArgs.dryRun,
+        });
+      } catch (err) {
+        warn(`Failed to mirror workspace back: ${err.message}`);
+      }
+    }
+  }
 }
 
 module.exports = { execute };

@@ -25,6 +25,12 @@ const DEFAULTS = {
     runtimeRoot: '~/.pix/runtime',
   },
   execution: 'direct',
+  workspace: {
+    projection: true,
+    projectionRoot: '~/.pix/workspaces',
+    mirrorBack: true,
+    exclude: ['node_modules', '.pnpm-store'],
+  },
   container: {
     image: 'pix-pi-sandbox',
     network: 'bridge',

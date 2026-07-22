@@ -2,11 +2,13 @@ const { loadConfig } = require('../../config/load-config');
 const { mergeConfig } = require('../../config/merge-config');
 const { validateConfig } = require('../../config/schema');
 const { getDefaultDistro, listDistros, isWslAvailable, hasCommand, isInsideWsl } = require('../../platform/wsl');
-const { isNtfsWorkspace } = require('../../platform/paths');
+const { isNtfsWorkspace, expandTilde } = require('../../platform/paths');
 const { resolveAgentDir } = require('../../runtime/resolve-runtime');
 const { imageExists } = require('../../docker/image');
+const { detectCopyTool } = require('../../workspace/projection');
 const { log, warn } = require('../output');
 const fs = require('fs');
+const path = require('path');
 const { spawnSync } = require('child_process');
 
 function checkDocker() {
@@ -23,6 +25,10 @@ function checkWslIntegration(distro) {
   const { runWsl } = require('../../platform/wsl');
   const result = runWsl(distro, ['bash', '-lic', 'docker --version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
   return result.status === 0;
+}
+
+function hasRsync() {
+  return detectCopyTool() === 'rsync';
 }
 
 function getPiVersionWsl(distro) {
@@ -117,16 +123,38 @@ function execute(parsedArgs) {
     }
   }
 
-  const workspace = cwd;
+  const sourceWorkspace = cwd;
   const agentDir = resolveAgentDir(config, process.env.HOME);
-  checks.push(`Workspace: ${workspace}`);
+  checks.push(`Workspace source: ${sourceWorkspace}`);
   checks.push(`Agent dir: ${agentDir}`);
 
-  if (isNtfsWorkspace(workspace)) {
-    issues.push('Workspace is on Windows NTFS. Sandbox file operations may be slower.');
+  if (isNtfsWorkspace(sourceWorkspace)) {
+    if (config.workspace?.projection !== false) {
+      checks.push('Workspace projection: enabled');
+    } else {
+      issues.push('Workspace is on Windows NTFS and projection is disabled. Sandbox file operations may be slower.');
+    }
   }
   if (isNtfsWorkspace(agentDir)) {
     issues.push('Agent dir is on Windows NTFS. Direct/Sandbox shared runtime performance may suffer.');
+  }
+
+  if (config.workspace?.projection !== false && isNtfsWorkspace(sourceWorkspace)) {
+    const projectionRoot = expandTilde(config.workspace?.projectionRoot || '~/.pix/workspaces', process.env.HOME);
+    checks.push(`Projection root: ${projectionRoot}`);
+    checks.push(`rsync available: ${hasRsync() ? 'yes' : 'no (will use cp)'}`);
+
+    if (isNtfsWorkspace(projectionRoot)) {
+      issues.push('Projection root is on Windows NTFS. This defeats the purpose of workspace projection.');
+    }
+
+    try {
+      fs.mkdirSync(projectionRoot, { recursive: true });
+      fs.accessSync(projectionRoot, fs.constants.R_OK | fs.constants.W_OK);
+      checks.push('Projection root writable: yes');
+    } catch {
+      issues.push(`Projection root is not readable/writable: ${projectionRoot}`);
+    }
   }
 
   try {

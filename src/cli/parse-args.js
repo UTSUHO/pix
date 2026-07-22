@@ -11,6 +11,9 @@ function parseArgs(argv) {
     winUser: null,
     includeExtensions: false,
     shell: null,
+    noProjection: false,
+    noMirrorBack: false,
+    mirrorBack: false,
     piArgs: [],
   };
 
@@ -32,6 +35,12 @@ function parseArgs(argv) {
       result.envAll = true;
     } else if (arg === '--include-extensions') {
       result.includeExtensions = true;
+    } else if (arg === '--no-projection') {
+      result.noProjection = true;
+    } else if (arg === '--no-mirror-back') {
+      result.noMirrorBack = true;
+    } else if (arg === '--mirror-back') {
+      result.mirrorBack = true;
     } else if (arg === '--distro') {
       i += 1;
       result.distro = argv[i];
