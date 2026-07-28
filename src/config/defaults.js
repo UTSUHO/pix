@@ -30,6 +30,13 @@ const DEFAULTS = {
     projectionRoot: '~/.pix/workspaces',
     mirrorBack: true,
     exclude: ['node_modules', '.pnpm-store'],
+    sync: {
+      enabled: true,
+      strategy: 'mutagen',
+      keepAlive: 'terminate',
+      mode: 'two-way-resolved',
+      exclude: [],
+    },
   },
   container: {
     image: 'pix-pi-sandbox',

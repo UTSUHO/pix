@@ -7,9 +7,8 @@ const { isNtfsWorkspace } = require('../../platform/paths');
 const { resolveAgentDir } = require('../../runtime/resolve-runtime');
 const {
   isProjectionNeeded,
-  projectWorkspace,
-  mirrorBackWorkspace,
 } = require('../../workspace/projection');
+const { prepareWorkspace, cleanupWorkspace } = require('../../workspace/sync');
 const { log, warn, fatal } = require('../output');
 const directExecutor = require('../../executors/direct-executor');
 const sandboxExecutor = require('../../executors/sandbox-executor');
@@ -42,6 +41,27 @@ function applyCliOverrides(config, parsedArgs) {
   if (parsedArgs.noMirrorBack) {
     config.workspace = config.workspace || {};
     config.workspace.mirrorBack = false;
+  }
+
+  if (parsedArgs.sync !== null) {
+    config.workspace = config.workspace || {};
+    config.workspace.sync = config.workspace.sync || {};
+    config.workspace.sync.enabled = parsedArgs.sync;
+  }
+  if (parsedArgs.syncStrategy) {
+    config.workspace = config.workspace || {};
+    config.workspace.sync = config.workspace.sync || {};
+    config.workspace.sync.strategy = parsedArgs.syncStrategy;
+  }
+  if (parsedArgs.syncKeepAlive) {
+    config.workspace = config.workspace || {};
+    config.workspace.sync = config.workspace.sync || {};
+    config.workspace.sync.keepAlive = parsedArgs.syncKeepAlive;
+  }
+  if (parsedArgs.syncMode) {
+    config.workspace = config.workspace || {};
+    config.workspace.sync = config.workspace.sync || {};
+    config.workspace.sync.mode = parsedArgs.syncMode;
   }
 }
 
@@ -82,16 +102,20 @@ async function execute(parsedArgs) {
 
   let effectiveWorkspace = sourceWorkspace;
   const projectionNeeded = isProjectionNeeded(sourceWorkspace, config);
+  let syncStrategy = 'none';
 
   if (projectionNeeded) {
     try {
-      effectiveWorkspace = projectWorkspace(sourceWorkspace, config, {
+      const result = prepareWorkspace(sourceWorkspace, config, {
         dryRun: parsedArgs.dryRun,
       });
+      effectiveWorkspace = result.effectiveWorkspace;
+      syncStrategy = result.strategy;
     } catch (err) {
-      warn(`Failed to project workspace: ${err.message}`);
+      warn(`Failed to prepare workspace: ${err.message}`);
       warn('Falling back to the original Windows path.');
       effectiveWorkspace = sourceWorkspace;
+      syncStrategy = 'none';
     }
   } else if (isNtfsWorkspace(sourceWorkspace)) {
     warn('Workspace is stored on Windows NTFS and projection is disabled.');
@@ -121,13 +145,13 @@ async function execute(parsedArgs) {
 
     fatal(`Unknown execution policy: ${execution}`);
   } finally {
-    if (projectionNeeded && effectiveWorkspace !== sourceWorkspace && config.workspace?.mirrorBack) {
+    if (projectionNeeded && effectiveWorkspace !== sourceWorkspace) {
       try {
-        mirrorBackWorkspace(effectiveWorkspace, sourceWorkspace, config, {
+        cleanupWorkspace(effectiveWorkspace, sourceWorkspace, config, {
           dryRun: parsedArgs.dryRun,
-        });
+        }, syncStrategy);
       } catch (err) {
-        warn(`Failed to mirror workspace back: ${err.message}`);
+        warn(`Failed to clean up workspace: ${err.message}`);
       }
     }
   }

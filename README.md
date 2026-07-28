@@ -9,6 +9,23 @@ Pix is installed on Windows, but Pi itself runs in WSL. Both **Direct** (WSL) an
 - Windows 10/11 with WSL2
 - A WSL distro with Node.js and `pi` installed (for Direct mode)
 - Docker Desktop with WSL integration enabled (for Sandbox mode)
+- [Mutagen](https://mutagen.io/) (optional, recommended for real-time workspace sync)
+
+## Mutagen installation
+
+When your project lives on a Windows drive, Pix can keep the WSL-ext4 projection in continuous two-way sync with the Windows source directory using [Mutagen](https://mutagen.io/). Install Mutagen inside your WSL distro:
+
+```bash
+curl -fsSL "https://github.com/mutagen-io/mutagen/releases/latest/download/mutagen_linux_amd64.tar.gz" | tar xzf - -C /usr/local/bin
+```
+
+Then verify it is available in your WSL PATH:
+
+```bash
+mutagen version
+```
+
+If Mutagen is not installed, Pix automatically falls back to the original `rsync`/`cp` projection behavior.
 
 ## Installation
 
@@ -57,6 +74,11 @@ By default `pix` uses the execution policy from your configuration (`direct` if 
 | `--no-projection` | Disable workspace projection for this run. |
 | `--mirror-back` | Mirror projected workspace back to Windows source after exit (default). |
 | `--no-mirror-back` | Disable mirror-back for this run. |
+| `--sync` | Enable Mutagen continuous sync (default). |
+| `--no-sync` | Disable Mutagen continuous sync; use `rsync`/`cp` projection. |
+| `--sync-strategy <name>` | Sync strategy: `mutagen` or `projection`. |
+| `--sync-keep-alive <mode>` | Mutagen session cleanup: `terminate`, `pause`, or `running`. |
+| `--sync-mode <mode>` | Mutagen sync mode: `two-way-safe`, `two-way-resolved`, `one-way-safe`, or `one-way-replica`. |
 | `--shell <shell>` | Shell for `install-shell-env` (`bash`, `zsh`, `fish`). |
 | `--help, -h` | Show help. |
 
@@ -87,7 +109,14 @@ Example `~/.pixrc.json`:
     "projection": true,
     "projectionRoot": "~/.pix/workspaces",
     "mirrorBack": false,
-    "exclude": ["node_modules", ".pnpm-store"]
+    "exclude": ["node_modules", ".pnpm-store"],
+    "sync": {
+      "enabled": true,
+      "strategy": "mutagen",
+      "mode": "two-way-resolved",
+      "keepAlive": "terminate",
+      "exclude": []
+    }
   },
   "container": {
     "image": "pix-pi-sandbox",
@@ -132,6 +161,11 @@ Example `.pix.json` for a project that needs network isolation:
 | `workspace.projectionRoot` | Parent directory for projected workspaces. Default: `~/.pix/workspaces`. |
 | `workspace.mirrorBack` | Mirror projected workspace back to Windows source after exit. Default: `true`. |
 | `workspace.exclude` | Paths excluded during projection. Default: `["node_modules", ".pnpm-store"]`. |
+| `workspace.sync.enabled` | Enable Mutagen continuous sync. Default: `true`. |
+| `workspace.sync.strategy` | Sync strategy: `mutagen` or `projection`. Default: `mutagen`. |
+| `workspace.sync.mode` | Mutagen sync mode: `two-way-safe`, `two-way-resolved`, `one-way-safe`, `one-way-replica`. Default: `two-way-resolved`. |
+| `workspace.sync.keepAlive` | Mutagen session cleanup after exit: `terminate`, `pause`, or `running`. Default: `terminate`. |
+| `workspace.sync.exclude` | Additional ignore patterns passed to Mutagen. Default: `[]`. |
 | `envAllowlist` | Environment variables forwarded into the container. |
 
 ### Precedence
@@ -182,6 +216,25 @@ Enable/configure in `~/.pixrc.json`:
 - `--no-mirror-back` disables mirror-back for a single run.
 
 Pix uses `rsync -a --delete` when available; otherwise it falls back to `cp -a`.
+
+## Continuous workspace sync with Mutagen
+
+When `workspace.sync.enabled` is `true` (default) and the workspace is on Windows NTFS, Pix first seeds a WSL-ext4 replica with `rsync`/`cp`, then asks Mutagen to keep the replica and the Windows source in continuous two-way sync. This gives `pi` fast ext4 I/O while your Windows editor sees changes in real time.
+
+```text
+/mnt/d/Documents/Github/myproject  ←→  ~/.pix/workspaces/myproject-a1b2c3d4
+         (Windows source)                (WSL ext4 replica, authoritative)
+```
+
+Default behavior:
+
+- `workspace.sync.strategy: "mutagen"`: try Mutagen first; fall back to one-shot `rsync`/`cp` projection if Mutagen is missing or fails.
+- `workspace.sync.mode: "two-way-resolved"`: changes propagate both ways; if a file is modified on both sides, the WSL replica wins.
+- `workspace.sync.keepAlive: "terminate"`: the Mutagen session is terminated when `pi` exits.
+
+Use `--sync-keep-alive pause` to pause the session on exit (faster next startup), or `--sync-keep-alive running` to leave it running indefinitely. Stale `pix-*` sessions are reported by `pix doctor`.
+
+If you prefer the old one-shot projection without continuous sync, set `workspace.sync.enabled: false` or run with `--no-sync`.
 
 ## Running `pi` directly inside WSL
 

@@ -31,6 +31,11 @@ Options:
   --no-projection           Disable workspace projection for this run
   --mirror-back             Mirror projected workspace back to Windows source after exit (default)
   --no-mirror-back          Disable mirror-back for this run
+  --sync                    Enable Mutagen continuous sync (default)
+  --no-sync                 Disable Mutagen continuous sync; use rsync/cp projection
+  --sync-strategy <name>    Sync strategy: mutagen or projection
+  --sync-keep-alive <mode>  Mutagen session cleanup: terminate, pause, or running
+  --sync-mode <mode>        Mutagen sync mode: two-way-safe, two-way-resolved, one-way-safe, one-way-replica
   --source <path>           Source .pi/agent directory for migrate
   --win-user <name>         Windows username for migrate source detection
   --include-extensions      Migrate extension source during migrate

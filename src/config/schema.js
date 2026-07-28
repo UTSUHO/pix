@@ -2,6 +2,9 @@ const { DEFAULTS } = require('./defaults');
 
 const VALID_EXECUTION = new Set(['direct', 'sandbox']);
 const VALID_NETWORKS = new Set(['bridge', 'none', 'host']);
+const VALID_SYNC_STRATEGIES = new Set(['mutagen', 'projection']);
+const VALID_SYNC_KEEP_ALIVE = new Set(['terminate', 'pause', 'running']);
+const VALID_SYNC_MODES = new Set(['two-way-safe', 'two-way-resolved', 'one-way-safe', 'one-way-replica']);
 
 function validateConfig(config) {
   const errors = [];
@@ -48,6 +51,29 @@ function validateConfig(config) {
 
     if (config.workspace.exclude !== undefined && !Array.isArray(config.workspace.exclude)) {
       errors.push('workspace.exclude must be an array.');
+    }
+
+    if (config.workspace.sync !== undefined) {
+      const sync = config.workspace.sync;
+      if (typeof sync !== 'object' || Array.isArray(sync)) {
+        errors.push('workspace.sync must be an object.');
+      } else {
+        if (sync.enabled !== undefined && typeof sync.enabled !== 'boolean') {
+          errors.push('workspace.sync.enabled must be a boolean.');
+        }
+        if (sync.strategy !== undefined && !VALID_SYNC_STRATEGIES.has(sync.strategy)) {
+          errors.push(`Invalid workspace.sync.strategy "${sync.strategy}". Must be "mutagen" or "projection".`);
+        }
+        if (sync.keepAlive !== undefined && !VALID_SYNC_KEEP_ALIVE.has(sync.keepAlive)) {
+          errors.push(`Invalid workspace.sync.keepAlive "${sync.keepAlive}". Must be "terminate", "pause", or "running".`);
+        }
+        if (sync.mode !== undefined && !VALID_SYNC_MODES.has(sync.mode)) {
+          errors.push(`Invalid workspace.sync.mode "${sync.mode}". Must be one of: ${Array.from(VALID_SYNC_MODES).join(', ')}.`);
+        }
+        if (sync.exclude !== undefined && !Array.isArray(sync.exclude)) {
+          errors.push('workspace.sync.exclude must be an array.');
+        }
+      }
     }
   }
 

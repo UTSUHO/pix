@@ -14,6 +14,10 @@ function parseArgs(argv) {
     noProjection: false,
     noMirrorBack: false,
     mirrorBack: false,
+    sync: null,
+    syncStrategy: null,
+    syncKeepAlive: null,
+    syncMode: null,
     piArgs: [],
   };
 
@@ -41,6 +45,19 @@ function parseArgs(argv) {
       result.noMirrorBack = true;
     } else if (arg === '--mirror-back') {
       result.mirrorBack = true;
+    } else if (arg === '--sync') {
+      result.sync = true;
+    } else if (arg === '--no-sync') {
+      result.sync = false;
+    } else if (arg === '--sync-strategy') {
+      i += 1;
+      result.syncStrategy = argv[i];
+    } else if (arg === '--sync-keep-alive') {
+      i += 1;
+      result.syncKeepAlive = argv[i];
+    } else if (arg === '--sync-mode') {
+      i += 1;
+      result.syncMode = argv[i];
     } else if (arg === '--distro') {
       i += 1;
       result.distro = argv[i];

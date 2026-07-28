@@ -5,6 +5,14 @@ const { classifyPath, isNtfsWorkspace } = require('../../platform/paths');
 const { resolveRuntimeRoot, resolveAgentDir } = require('../../runtime/resolve-runtime');
 const { imageExists } = require('../../docker/image');
 const { isProjectionNeeded, resolveProjectedPath } = require('../../workspace/projection');
+const { isSyncEnabled } = require('../../workspace/sync');
+const {
+  resolveMutagenPath,
+  getMutagenVersion,
+  computeSessionName,
+  sessionExists,
+  getSessionState,
+} = require('../../workspace/mutagen');
 const { spawnSync } = require('child_process');
 
 function checkDocker() {
@@ -103,6 +111,27 @@ function execute(parsedArgs) {
     console.log(`Mirror-back: ${config.workspace?.mirrorBack ? 'yes' : 'no'}`);
   } else {
     console.log(`Workspace storage: ${getWorkspaceStorageType(sourceWorkspace)}`);
+  }
+
+  const sync = config.workspace?.sync || {};
+  console.log(`Sync enabled: ${sync.enabled !== false ? 'yes' : 'no'}`);
+  if (sync.enabled !== false) {
+    console.log(`Sync strategy: ${sync.strategy || 'mutagen'}`);
+    console.log(`Sync mode: ${sync.mode || 'two-way-resolved'}`);
+    console.log(`Sync keep-alive: ${sync.keepAlive || 'terminate'}`);
+  }
+
+  const mutagenPath = resolveMutagenPath();
+  const mutagenAvailable = mutagenPath !== null;
+  console.log(`Mutagen available: ${mutagenAvailable ? 'yes' : 'no'}`);
+  if (mutagenAvailable) {
+    console.log(`Mutagen path: ${mutagenPath}`);
+    console.log(`Mutagen version: ${getMutagenVersion(mutagenPath) || 'unknown'}`);
+    if (projectedWorkspace) {
+      const sessionName = computeSessionName(sourceWorkspace);
+      const exists = sessionExists(mutagenPath, sessionName);
+      console.log(`Mutagen session: ${sessionName} (${exists ? getSessionState(mutagenPath, sessionName) || 'present' : 'not active'})`);
+    }
   }
 
   if (isNtfsWorkspace(agentDir)) {

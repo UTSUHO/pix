@@ -6,6 +6,12 @@ const { isNtfsWorkspace, expandTilde } = require('../../platform/paths');
 const { resolveAgentDir } = require('../../runtime/resolve-runtime');
 const { imageExists } = require('../../docker/image');
 const { detectCopyTool } = require('../../workspace/projection');
+const { isSyncEnabled } = require('../../workspace/sync');
+const {
+  resolveMutagenPath,
+  getMutagenVersion,
+  listPixSessions,
+} = require('../../workspace/mutagen');
 const { log, warn } = require('../output');
 const fs = require('fs');
 const path = require('path');
@@ -154,6 +160,23 @@ function execute(parsedArgs) {
       checks.push('Projection root writable: yes');
     } catch {
       issues.push(`Projection root is not readable/writable: ${projectionRoot}`);
+    }
+  }
+
+  if (isSyncEnabled(config)) {
+    const mutagenPath = resolveMutagenPath();
+    checks.push(`Mutagen available: ${mutagenPath ? 'yes' : 'no (install Mutagen to enable continuous sync)'}`);
+    if (mutagenPath) {
+      checks.push(`Mutagen version: ${getMutagenVersion(mutagenPath) || 'unknown'}`);
+      try {
+        const staleSessions = listPixSessions(mutagenPath);
+        checks.push(`Stale pix Mutagen sessions: ${staleSessions.length}`);
+        if (staleSessions.length > 0) {
+          warn(`Found ${staleSessions.length} stale pix Mutagen session(s): ${staleSessions.join(', ')}`);
+        }
+      } catch (err) {
+        warn(`Failed to list Mutagen sessions: ${err.message}`);
+      }
     }
   }
 
