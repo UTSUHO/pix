@@ -46,7 +46,10 @@ const DEFAULTS = {
   },
   envAllowlist: DEFAULT_ALLOWLIST,
   security: {
-    mntGuard: true,
+    // Custom /mnt guard template. User config only; project .pix.json cannot
+    // set security keys. The guard itself is always injected unless
+    // --no-mnt-guard is passed at launch.
+    mntGuardSource: null,
   },
 };
 

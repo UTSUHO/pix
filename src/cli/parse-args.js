@@ -19,10 +19,11 @@ function parseArgs(argv) {
     syncKeepAlive: null,
     syncMode: null,
     mntGuard: null,
+    dockerfile: null,
     piArgs: [],
   };
 
-  const KNOWN_COMMANDS = new Set(['status', 'doctor', 'migrate', 'install-shell-env']);
+  const KNOWN_COMMANDS = new Set(['status', 'doctor', 'migrate', 'install-shell-env', 'init-guard']);
 
   let i = 0;
   while (i < argv.length) {
@@ -60,9 +61,13 @@ function parseArgs(argv) {
       i += 1;
       result.syncMode = argv[i];
     } else if (arg === '--mnt-guard') {
+      // Deprecated no-op: the guard is injected by default.
       result.mntGuard = true;
     } else if (arg === '--no-mnt-guard') {
       result.mntGuard = false;
+    } else if (arg === '--dockerfile') {
+      i += 1;
+      result.dockerfile = argv[i];
     } else if (arg === '--distro') {
       i += 1;
       result.distro = argv[i];

@@ -96,9 +96,12 @@ function execute(parsedArgs) {
   console.log(`WSL distro: ${distro}`);
   console.log(`Runtime root: ${runtimeRoot}`);
   console.log(`Pi agent dir: ${agentDir}`);
-  const mntGuardEnabled = config.security?.mntGuard !== false;
-  const guard = guardStatus(agentDir);
-  console.log(`Mnt guard: ${mntGuardEnabled ? 'enabled' : 'disabled'}${guard.installed ? ` (installed v${guard.version})` : ' (not installed)'}`);
+  const guard = guardStatus(agentDir, config);
+  const guardMode = parsedArgs.mntGuard === false ? 'disabled for this run (--no-mnt-guard)' : 'injected by default';
+  console.log(`Mnt guard: ${guardMode}${guard.installed ? ` (installed v${guard.version})` : ' (not installed)'}`);
+  if (guard.template) {
+    console.log(`Mnt guard template: ${guard.template.origin} (${guard.template.source})`);
+  }
   console.log(`Pi available: ${piAvailable ? 'yes' : 'no'}`);
   if (piAvailable) {
     console.log(`Pi version (WSL): ${getPiVersionWsl(distro)}`);

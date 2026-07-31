@@ -21,6 +21,9 @@ function collectWarnings(userConfig, projectConfig) {
       }
     }
   }
+  if (projectConfig && Object.prototype.hasOwnProperty.call(projectConfig, 'security')) {
+    warnings.push('Project .pix.json cannot set "security" keys (policy settings are user-level only). Ignored.');
+  }
   return warnings;
 }
 
@@ -47,12 +50,18 @@ function mergeDeep(target, source) {
 }
 
 function mergeConfig({ user, project }, cliOverrides = {}) {
+  // Security policy must never be silently influenced by a project checkout.
+  const safeProject = project ? { ...project } : project;
+  if (safeProject) {
+    delete safeProject.security;
+  }
+
   const base = mergeDeep(DEFAULTS, user);
-  const withProject = mergeDeep(base, project);
+  const withProject = mergeDeep(base, safeProject);
 
   const allowlist = new Set([
     ...(base.envAllowlist || DEFAULTS.envAllowlist),
-    ...(project.envAllowlist || []),
+    ...(safeProject?.envAllowlist || []),
   ]);
 
   const result = mergeDeep(withProject, cliOverrides);

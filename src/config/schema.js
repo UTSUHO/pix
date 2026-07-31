@@ -30,6 +30,10 @@ function validateConfig(config) {
     if (!Array.isArray(config.container.extraRunOptions)) {
       errors.push('container.extraRunOptions must be an array.');
     }
+
+    if (config.container.dockerfile !== undefined && typeof config.container.dockerfile !== 'string') {
+      errors.push('container.dockerfile must be a string.');
+    }
   }
 
   if (!Array.isArray(config.envAllowlist)) {
@@ -39,8 +43,8 @@ function validateConfig(config) {
   if (config.security !== undefined) {
     if (typeof config.security !== 'object' || Array.isArray(config.security)) {
       errors.push('security must be an object.');
-    } else if (config.security.mntGuard !== undefined && typeof config.security.mntGuard !== 'boolean') {
-      errors.push('security.mntGuard must be a boolean.');
+    } else if (config.security.mntGuardSource !== undefined && config.security.mntGuardSource !== null && typeof config.security.mntGuardSource !== 'string') {
+      errors.push('security.mntGuardSource must be a string.');
     }
   }
 

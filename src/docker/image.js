@@ -1,8 +1,9 @@
 const path = require('path');
+const fs = require('fs');
 const { spawnSync } = require('child_process');
 const { log } = require('../cli/output');
 const { isInsideWsl, toWslPath } = require('../platform/wsl');
-const { normalizeSlashes } = require('../platform/paths');
+const { normalizeSlashes, expandTilde } = require('../platform/paths');
 
 function resolvePackageRoot() {
   if (process.env.PIX_PACKAGE_ROOT) {
@@ -50,17 +51,36 @@ function buildImage(dockerfilePath, imageName) {
   }
 }
 
+function resolveDockerfilePath(config) {
+  const custom = config.container?.dockerfile || config.dockerfilePath;
+  if (custom) {
+    const resolved = normalizeSlashes(
+      expandTilde(custom).startsWith('/') ? expandTilde(custom) : path.posix.resolve(process.cwd(), expandTilde(custom))
+    );
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Custom Dockerfile not found: ${resolved}`);
+    }
+    return resolved;
+  }
+  return path.posix.join(resolvePackageRoot(), 'docker', 'Dockerfile');
+}
+
 function ensureImage(config, options = {}) {
   const imageName = config.container?.image || 'pix-pi-sandbox';
-  const dockerfilePath =
-    config.dockerfilePath || path.posix.join(resolvePackageRoot(), 'docker', 'Dockerfile');
+  const dockerfilePath = resolveDockerfilePath(config);
   const { rebuild = false } = options;
 
-  if (rebuild || !imageExists(imageName)) {
-    buildImage(dockerfilePath, imageName);
+  if ((rebuild || !imageExists(imageName)) === false) {
+    return imageName;
   }
+
+  if (config.container?.dockerfile && !rebuild) {
+    log('Using custom Dockerfile; pass --rebuild if the existing image is stale.');
+  }
+
+  buildImage(dockerfilePath, imageName);
 
   return imageName;
 }
 
-module.exports = { imageExists, buildImage, ensureImage };
+module.exports = { imageExists, buildImage, ensureImage, resolveDockerfilePath };

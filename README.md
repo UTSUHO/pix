@@ -57,6 +57,7 @@ By default `pix` uses the execution policy from your configuration (`direct` if 
 | `pix doctor` | Diagnose environment issues (WSL, Docker, NTFS paths, image, runtime mounts, version consistency, etc.). |
 | `pix migrate` | One-time migration from Windows `.pi/agent` to the WSL canonical runtime. |
 | `pix install-shell-env` | Add `PI_CODING_AGENT_DIR` to your shell rc file so plain `pi` uses the same runtime. |
+| `pix init-guard` | Copy the default `/mnt` guard template to `~/.pix/extensions/` for customization. |
 
 ### Options
 
@@ -79,8 +80,8 @@ By default `pix` uses the execution policy from your configuration (`direct` if 
 | `--sync-strategy <name>` | Sync strategy: `mutagen` or `projection`. |
 | `--sync-keep-alive <mode>` | Mutagen session cleanup: `terminate`, `pause`, or `running`. |
 | `--sync-mode <mode>` | Mutagen sync mode: `two-way-safe`, `two-way-resolved`, `one-way-safe`, or `one-way-replica`. |
-| `--mnt-guard` | Install the `/mnt` guard pi extension (default). |
-| `--no-mnt-guard` | Disable and remove the `/mnt` guard pi extension. |
+| `--no-mnt-guard` | Do not inject the `/mnt` guard for this run (removes the installed extension). The guard is injected by default; this launch-time flag is the only way to opt out. |
+| `--dockerfile <path>` | Use a custom Dockerfile for the sandbox image. |
 | `--shell <shell>` | Shell for `install-shell-env` (`bash`, `zsh`, `fish`). |
 | `--help, -h` | Show help. |
 
@@ -159,6 +160,7 @@ Example `.pix.json` for a project that needs network isolation:
 | `container.network` | Docker network mode, e.g. `bridge`, `none`, `host`. Default: `bridge`. |
 | `container.workspaceAccess` | `read-write` or `read-only`. Default: `read-write`. |
 | `container.extraRunOptions` | Extra options passed to `docker run`. |
+| `container.dockerfile` | Custom Dockerfile path for the sandbox image (`~` and relative paths supported). Default: the Dockerfile bundled with pix. Use `--rebuild` after changing it. |
 | `workspace.projection` | Auto-project Windows NTFS workspaces into WSL filesystem. Default: `true`. |
 | `workspace.projectionRoot` | Parent directory for projected workspaces. Default: `~/.pix/workspaces`. |
 | `workspace.mirrorBack` | Mirror projected workspace back to Windows source after exit. Default: `true`. |
@@ -169,13 +171,15 @@ Example `.pix.json` for a project that needs network isolation:
 | `workspace.sync.keepAlive` | Mutagen session cleanup after exit: `terminate`, `pause`, or `running`. Default: `terminate`. |
 | `workspace.sync.exclude` | Additional ignore patterns passed to Mutagen. Default: `[]`. |
 | `envAllowlist` | Environment variables forwarded into the container. |
-| `security.mntGuard` | Install the `/mnt` guard extension into the shared Pi runtime. Reads of `/mnt/...` (Windows drives) ask for confirmation; writes are blocked. Default: `true`. |
+| `security.mntGuardSource` | **User config only.** Custom `/mnt` guard template path. Default: `~/.pix/extensions/pix-mnt-guard.ts` if it exists, otherwise the template bundled with pix. See [`/mnt` guard](#mnt-guard-windows-drive-protection). |
 
 ### Precedence
 
 ```text
 CLI flags > .pix.json > ~/.pixrc.json > defaults
 ```
+
+Exception: `security.*` keys are **user-level only**. A project `.pix.json` that contains `security` is ignored with a warning, so an untrusted checkout can never weaken or redirect the `/mnt` guard policy.
 
 ## How it works
 
@@ -254,7 +258,31 @@ The extension is a `tool_call` middleware:
 
 This is an application-level policy hook, not a hard security boundary: obfuscated shell (variable splicing, globs) can evade string matching. Use `pix --sandbox` for mount-level isolation when you need a hard guarantee.
 
-Disable with `--no-mnt-guard` or `"security": { "mntGuard": false }`; Pix then removes the extension file it installed (user-maintained files with the same name are never touched).
+### Opting out (launch-time only)
+
+The guard is injected by default on every launch. The **only** way to disable it is the explicit launch flag:
+
+```bash
+pix --no-mnt-guard
+```
+
+This removes the extension file pix installed (so `pi` will not auto-discover it) and launches without the guard. The next normal launch re-installs it. Config files — user or project — can never disable the guard; there is no silent opt-out.
+
+### Customizing the guard template
+
+The installed extension is rendered from a template, resolved in this order:
+
+1. `security.mntGuardSource` in `~/.pixrc.json` (user config only)
+2. `~/.pix/extensions/pix-mnt-guard.ts` (your edited copy)
+3. the template bundled with pix (default)
+
+To customize the policy, scaffold the editable copy once and edit it:
+
+```bash
+pix init-guard   # copies the default template to ~/.pix/extensions/pix-mnt-guard.ts
+```
+
+Pix installs your template into the shared runtime on every subsequent launch (content-based refresh: the installed file is rewritten only when it differs from the resolved template). Keep the first-line `// pix-mnt-guard vN` marker in your template so pix can recognize files it installed; user-maintained files with the same name but no marker are never overwritten or removed.
 
 ## Running `pi` directly inside WSL
 

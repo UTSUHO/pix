@@ -11,6 +11,7 @@ const statusCommand = require('../src/cli/commands/status');
 const doctorCommand = require('../src/cli/commands/doctor');
 const migrateCommand = require('../src/cli/commands/migrate');
 const installShellEnvCommand = require('../src/cli/commands/install-shell-env');
+const initGuardCommand = require('../src/cli/commands/init-guard');
 
 function printHelp() {
   console.log(`Usage: pix [options] [command] [pi-args...]
@@ -20,6 +21,7 @@ Commands:
   doctor              Diagnose pix environment issues
   migrate             Migrate Windows .pi/agent to the WSL canonical runtime
   install-shell-env   Add PI_CODING_AGENT_DIR to shell rc file
+  init-guard          Copy the default /mnt guard template to ~/.pix/extensions/ for customization
 
 Options:
   --direct                  Force WSL direct execution
@@ -36,8 +38,8 @@ Options:
   --sync-strategy <name>    Sync strategy: mutagen or projection
   --sync-keep-alive <mode>  Mutagen session cleanup: terminate, pause, or running
   --sync-mode <mode>        Mutagen sync mode: two-way-safe, two-way-resolved, one-way-safe, one-way-replica
-  --mnt-guard               Install the /mnt guard pi extension (default)
-  --no-mnt-guard            Remove the /mnt guard pi extension for this setup
+  --no-mnt-guard            Do not inject the /mnt guard for this run (removes the installed extension)
+  --dockerfile <path>       Use a custom Dockerfile for the sandbox image
   --source <path>           Source .pi/agent directory for migrate
   --win-user <name>         Windows username for migrate source detection
   --include-extensions      Migrate extension source during migrate
@@ -124,6 +126,10 @@ async function main() {
 
   if (parsed.command === 'install-shell-env') {
     return installShellEnvCommand.execute(parsed);
+  }
+
+  if (parsed.command === 'init-guard') {
+    return initGuardCommand.execute(parsed);
   }
 
   return runCommand.execute(parsed);

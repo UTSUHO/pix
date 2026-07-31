@@ -64,9 +64,9 @@ function applyCliOverrides(config, parsedArgs) {
     config.workspace.sync = config.workspace.sync || {};
     config.workspace.sync.mode = parsedArgs.syncMode;
   }
-  if (parsedArgs.mntGuard !== null && parsedArgs.mntGuard !== undefined) {
-    config.security = config.security || {};
-    config.security.mntGuard = parsedArgs.mntGuard;
+  if (parsedArgs.dockerfile) {
+    config.container = config.container || {};
+    config.container.dockerfile = parsedArgs.dockerfile;
   }
 }
 
@@ -105,12 +105,15 @@ async function execute(parsedArgs) {
 
   ensureRuntimeDir(agentDir);
 
-  const mntGuardEnabled = config.security?.mntGuard !== false;
+  // The /mnt guard is pix-managed policy: injected by default, and only an
+  // explicit --no-mnt-guard at launch removes it. Config files (user or
+  // project) can customize the template but can never disable the guard.
+  const mntGuardEnabled = parsedArgs.mntGuard !== false;
   try {
     if (mntGuardEnabled) {
-      installGuard(agentDir, { dryRun: parsedArgs.dryRun });
+      installGuard(agentDir, { dryRun: parsedArgs.dryRun, config });
     } else {
-      removeGuard(agentDir, { dryRun: parsedArgs.dryRun });
+      removeGuard(agentDir, { dryRun: parsedArgs.dryRun, config });
     }
   } catch (err) {
     warn(`Failed to ${mntGuardEnabled ? 'install' : 'remove'} the /mnt guard extension: ${err.message}`);

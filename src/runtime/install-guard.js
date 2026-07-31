@@ -1,12 +1,18 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { log } = require('../cli/output');
+const { expandTilde, normalizeSlashes } = require('../platform/paths');
 
 const GUARD_FILE_NAME = 'pix-mnt-guard.ts';
 const VERSION_MARKER = /^\/\/ pix-mnt-guard v(\d+)\s*$/m;
 
-function guardSourcePath() {
+function bundledGuardPath() {
   return path.join(__dirname, '..', '..', 'assets', 'extensions', GUARD_FILE_NAME);
+}
+
+function userTemplatePath(homeDir = os.homedir()) {
+  return path.join(homeDir, '.pix', 'extensions', GUARD_FILE_NAME);
 }
 
 function guardDestPath(agentDir) {
@@ -23,43 +29,70 @@ function isOurGuardFile(content) {
 }
 
 /**
- * Install (or upgrade) the /mnt guard extension into the shared pi runtime.
- * Returns { installed: boolean, path: string, reason?: string }.
+ * Resolve which template to install from, highest priority first:
+ *   1. security.mntGuardSource (user config only; project config is filtered out)
+ *   2. ~/.pix/extensions/pix-mnt-guard.ts (user-modified template, see `pix init-guard`)
+ *   3. the template bundled with the running pix package (default)
+ */
+function resolveGuardSource(config, homeDir = os.homedir()) {
+  const explicit = config?.security?.mntGuardSource;
+  if (explicit) {
+    const resolved = normalizeSlashes(expandTilde(explicit, homeDir));
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`security.mntGuardSource does not exist: ${resolved}`);
+    }
+    return { source: resolved, origin: 'config' };
+  }
+
+  const userTemplate = userTemplatePath(homeDir);
+  if (fs.existsSync(userTemplate)) {
+    return { source: userTemplate, origin: 'user-template' };
+  }
+
+  return { source: bundledGuardPath(), origin: 'bundled' };
+}
+
+/**
+ * Install (or refresh) the /mnt guard extension into the shared pi runtime.
+ * The installed file is a cache of the resolved template: it is (re)written
+ * whenever its content differs from the template, and left alone otherwise.
+ * A same-named file NOT installed by pix (no version marker, content unknown)
+ * is never overwritten.
  */
 function installGuard(agentDir, options = {}) {
-  const { dryRun = false } = options;
-  const src = guardSourcePath();
+  const { dryRun = false, config = null } = options;
+  const { source, origin } = resolveGuardSource(config);
   const dest = guardDestPath(agentDir);
 
-  const srcContent = fs.readFileSync(src, 'utf8');
-  const srcVersion = readVersion(srcContent);
+  const srcContent = fs.readFileSync(source, 'utf8');
 
   if (fs.existsSync(dest)) {
     const destContent = fs.readFileSync(dest, 'utf8');
-    if (!isOurGuardFile(destContent)) {
-      // A user-maintained file with the same name: never overwrite.
-      return { installed: false, path: dest, reason: 'unmanaged file with the same name exists' };
+    if (destContent === srcContent) {
+      return { installed: false, path: dest, source, origin, reason: 'up to date' };
     }
-    if (readVersion(destContent) >= srcVersion && destContent === srcContent) {
-      return { installed: false, path: dest, reason: 'up to date' };
+    if (!isOurGuardFile(destContent)) {
+      return { installed: false, path: dest, source, origin, reason: 'unmanaged file with the same name exists' };
     }
   }
 
   if (dryRun) {
-    return { installed: true, path: dest, reason: 'dry-run' };
+    return { installed: true, path: dest, source, origin, reason: 'dry-run' };
   }
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.writeFileSync(dest, srcContent);
-  log(`Installed pi extension: ${dest} (v${srcVersion})`);
-  return { installed: true, path: dest };
+  log(`Installed pi extension: ${dest} (from ${origin}: ${source})`);
+  return { installed: true, path: dest, source, origin };
 }
 
 /**
- * Remove the guard extension, but only if it is a file pix itself installed.
+ * Remove the guard extension (used by --no-mnt-guard so pi will not
+ * auto-discover it). Only removes files pix itself installed: anything with
+ * our version marker, or content identical to the currently resolved template.
  */
 function removeGuard(agentDir, options = {}) {
-  const { dryRun = false } = options;
+  const { dryRun = false, config = null } = options;
   const dest = guardDestPath(agentDir);
 
   if (!fs.existsSync(dest)) {
@@ -67,7 +100,17 @@ function removeGuard(agentDir, options = {}) {
   }
 
   const content = fs.readFileSync(dest, 'utf8');
-  if (!isOurGuardFile(content)) {
+  let managed = isOurGuardFile(content);
+  if (!managed) {
+    try {
+      const { source } = resolveGuardSource(config);
+      managed = content === fs.readFileSync(source, 'utf8');
+    } catch {
+      managed = false;
+    }
+  }
+
+  if (!managed) {
     return { removed: false, path: dest, reason: 'unmanaged file, left untouched' };
   }
 
@@ -80,13 +123,28 @@ function removeGuard(agentDir, options = {}) {
   return { removed: true, path: dest };
 }
 
-function guardStatus(agentDir) {
+function guardStatus(agentDir, config = null) {
   const dest = guardDestPath(agentDir);
+  let template = null;
+  try {
+    template = resolveGuardSource(config);
+  } catch {
+    template = null;
+  }
   if (!fs.existsSync(dest)) {
-    return { installed: false, path: dest, version: 0 };
+    return { installed: false, path: dest, version: 0, template };
   }
   const content = fs.readFileSync(dest, 'utf8');
-  return { installed: true, path: dest, version: readVersion(content), managed: isOurGuardFile(content) };
+  return { installed: true, path: dest, version: readVersion(content), managed: isOurGuardFile(content), template };
 }
 
-module.exports = { installGuard, removeGuard, guardStatus, guardDestPath, GUARD_FILE_NAME };
+module.exports = {
+  installGuard,
+  removeGuard,
+  guardStatus,
+  resolveGuardSource,
+  guardDestPath,
+  bundledGuardPath,
+  userTemplatePath,
+  GUARD_FILE_NAME,
+};
