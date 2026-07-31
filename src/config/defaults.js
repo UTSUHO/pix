@@ -45,6 +45,9 @@ const DEFAULTS = {
     extraRunOptions: [],
   },
   envAllowlist: DEFAULT_ALLOWLIST,
+  security: {
+    mntGuard: true,
+  },
 };
 
 module.exports = { DEFAULTS, DEFAULT_ALLOWLIST };

@@ -18,6 +18,7 @@ function parseArgs(argv) {
     syncStrategy: null,
     syncKeepAlive: null,
     syncMode: null,
+    mntGuard: null,
     piArgs: [],
   };
 
@@ -58,6 +59,10 @@ function parseArgs(argv) {
     } else if (arg === '--sync-mode') {
       i += 1;
       result.syncMode = argv[i];
+    } else if (arg === '--mnt-guard') {
+      result.mntGuard = true;
+    } else if (arg === '--no-mnt-guard') {
+      result.mntGuard = false;
     } else if (arg === '--distro') {
       i += 1;
       result.distro = argv[i];

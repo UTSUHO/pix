@@ -36,6 +36,14 @@ function validateConfig(config) {
     errors.push('envAllowlist must be an array.');
   }
 
+  if (config.security !== undefined) {
+    if (typeof config.security !== 'object' || Array.isArray(config.security)) {
+      errors.push('security must be an object.');
+    } else if (config.security.mntGuard !== undefined && typeof config.security.mntGuard !== 'boolean') {
+      errors.push('security.mntGuard must be a boolean.');
+    }
+  }
+
   if (config.workspace) {
     if (config.workspace.projection !== undefined && typeof config.workspace.projection !== 'boolean') {
       errors.push('workspace.projection must be a boolean.');

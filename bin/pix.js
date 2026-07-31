@@ -36,6 +36,8 @@ Options:
   --sync-strategy <name>    Sync strategy: mutagen or projection
   --sync-keep-alive <mode>  Mutagen session cleanup: terminate, pause, or running
   --sync-mode <mode>        Mutagen sync mode: two-way-safe, two-way-resolved, one-way-safe, one-way-replica
+  --mnt-guard               Install the /mnt guard pi extension (default)
+  --no-mnt-guard            Remove the /mnt guard pi extension for this setup
   --source <path>           Source .pi/agent directory for migrate
   --win-user <name>         Windows username for migrate source detection
   --include-extensions      Migrate extension source during migrate

@@ -5,6 +5,7 @@ const { validateConfig } = require('../../config/schema');
 const { getDefaultDistro, hasCommand } = require('../../platform/wsl');
 const { isNtfsWorkspace } = require('../../platform/paths');
 const { resolveAgentDir } = require('../../runtime/resolve-runtime');
+const { installGuard, removeGuard } = require('../../runtime/install-guard');
 const {
   isProjectionNeeded,
 } = require('../../workspace/projection');
@@ -63,6 +64,10 @@ function applyCliOverrides(config, parsedArgs) {
     config.workspace.sync = config.workspace.sync || {};
     config.workspace.sync.mode = parsedArgs.syncMode;
   }
+  if (parsedArgs.mntGuard !== null && parsedArgs.mntGuard !== undefined) {
+    config.security = config.security || {};
+    config.security.mntGuard = parsedArgs.mntGuard;
+  }
 }
 
 async function execute(parsedArgs) {
@@ -99,6 +104,17 @@ async function execute(parsedArgs) {
   }
 
   ensureRuntimeDir(agentDir);
+
+  const mntGuardEnabled = config.security?.mntGuard !== false;
+  try {
+    if (mntGuardEnabled) {
+      installGuard(agentDir, { dryRun: parsedArgs.dryRun });
+    } else {
+      removeGuard(agentDir, { dryRun: parsedArgs.dryRun });
+    }
+  } catch (err) {
+    warn(`Failed to ${mntGuardEnabled ? 'install' : 'remove'} the /mnt guard extension: ${err.message}`);
+  }
 
   let effectiveWorkspace = sourceWorkspace;
   const projectionNeeded = isProjectionNeeded(sourceWorkspace, config);

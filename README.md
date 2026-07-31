@@ -79,6 +79,8 @@ By default `pix` uses the execution policy from your configuration (`direct` if 
 | `--sync-strategy <name>` | Sync strategy: `mutagen` or `projection`. |
 | `--sync-keep-alive <mode>` | Mutagen session cleanup: `terminate`, `pause`, or `running`. |
 | `--sync-mode <mode>` | Mutagen sync mode: `two-way-safe`, `two-way-resolved`, `one-way-safe`, or `one-way-replica`. |
+| `--mnt-guard` | Install the `/mnt` guard pi extension (default). |
+| `--no-mnt-guard` | Disable and remove the `/mnt` guard pi extension. |
 | `--shell <shell>` | Shell for `install-shell-env` (`bash`, `zsh`, `fish`). |
 | `--help, -h` | Show help. |
 
@@ -167,6 +169,7 @@ Example `.pix.json` for a project that needs network isolation:
 | `workspace.sync.keepAlive` | Mutagen session cleanup after exit: `terminate`, `pause`, or `running`. Default: `terminate`. |
 | `workspace.sync.exclude` | Additional ignore patterns passed to Mutagen. Default: `[]`. |
 | `envAllowlist` | Environment variables forwarded into the container. |
+| `security.mntGuard` | Install the `/mnt` guard extension into the shared Pi runtime. Reads of `/mnt/...` (Windows drives) ask for confirmation; writes are blocked. Default: `true`. |
 
 ### Precedence
 
@@ -235,6 +238,23 @@ Default behavior:
 Use `--sync-keep-alive pause` to pause the session on exit (faster next startup), or `--sync-keep-alive running` to leave it running indefinitely. Stale `pix-*` sessions are reported by `pix doctor`.
 
 If you prefer the old one-shot projection without continuous sync, set `workspace.sync.enabled: false` or run with `--no-sync`.
+
+## `/mnt` guard (Windows drive protection)
+
+On WSL, Pix installs a small Pi extension (`pix-mnt-guard.ts`) into the shared runtime at `<agentDir>/extensions/` on every launch. Because both Direct and Sandbox modes set `PI_CODING_AGENT_DIR` to the same path, the guard is auto-discovered by `pi` in both modes (and by plain `pi` after `pix install-shell-env`).
+
+The extension is a `tool_call` middleware:
+
+- Tool calls that do **not** touch `/mnt` pass through untouched.
+- **Reads** of `/mnt/...` (`read`, `grep`, `find`, `ls`, read-like `bash` commands) ask the user: allow once, trust the path for the session, or deny.
+- **Writes** to `/mnt/...` (`write`, `edit`, and write-like `bash` commands such as `rm`, redirection, `cp`/`mv`/`rsync` with a `/mnt` destination, `sed -i`, etc.) are blocked outright.
+- `cd /mnt/...` inside a bash command counts as touching `/mnt`.
+- In non-interactive modes (`pi -p`, JSON mode) there is no way to ask, so `/mnt` access is blocked (fail-closed).
+- The session working directory is implicitly trusted: if you launch `pi` from a `/mnt` directory, that tree does not prompt.
+
+This is an application-level policy hook, not a hard security boundary: obfuscated shell (variable splicing, globs) can evade string matching. Use `pix --sandbox` for mount-level isolation when you need a hard guarantee.
+
+Disable with `--no-mnt-guard` or `"security": { "mntGuard": false }`; Pix then removes the extension file it installed (user-maintained files with the same name are never touched).
 
 ## Running `pi` directly inside WSL
 

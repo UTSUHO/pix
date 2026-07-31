@@ -3,6 +3,7 @@ const { mergeConfig } = require('../../config/merge-config');
 const { getDefaultDistro, hasCommand, isInsideWsl } = require('../../platform/wsl');
 const { classifyPath, isNtfsWorkspace } = require('../../platform/paths');
 const { resolveRuntimeRoot, resolveAgentDir } = require('../../runtime/resolve-runtime');
+const { guardStatus } = require('../../runtime/install-guard');
 const { imageExists } = require('../../docker/image');
 const { isProjectionNeeded, resolveProjectedPath } = require('../../workspace/projection');
 const { isSyncEnabled } = require('../../workspace/sync');
@@ -95,6 +96,9 @@ function execute(parsedArgs) {
   console.log(`WSL distro: ${distro}`);
   console.log(`Runtime root: ${runtimeRoot}`);
   console.log(`Pi agent dir: ${agentDir}`);
+  const mntGuardEnabled = config.security?.mntGuard !== false;
+  const guard = guardStatus(agentDir);
+  console.log(`Mnt guard: ${mntGuardEnabled ? 'enabled' : 'disabled'}${guard.installed ? ` (installed v${guard.version})` : ' (not installed)'}`);
   console.log(`Pi available: ${piAvailable ? 'yes' : 'no'}`);
   if (piAvailable) {
     console.log(`Pi version (WSL): ${getPiVersionWsl(distro)}`);
