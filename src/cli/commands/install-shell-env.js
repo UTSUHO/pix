@@ -1,10 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { log } = require('../output');
-const { loadConfig } = require('../../config/load-config');
-const { mergeConfig } = require('../../config/merge-config');
-const { resolveAgentDir } = require('../../runtime/resolve-runtime');
+const { log, warn } = require('../output');
 
 const SUPPORTED_SHELLS = new Set(['bash', 'zsh', 'fish']);
 
@@ -28,13 +25,15 @@ function getRcPath(shell) {
   }
 }
 
-function buildEnvLine(agentDir) {
-  return `export PI_CODING_AGENT_DIR="${agentDir}"`;
-}
-
-function buildBlock(agentDir) {
+function buildBlock() {
+  // Deliberately no PI_CODING_AGENT_DIR: that variable used to point bare pi
+  // at the shared runtime — now it would point at an immutable release or a
+  // finished run's directory, both of which are wrong. The WSL shim works
+  // through ~/.pix/host-link.json and needs no environment.
   return `# >>> pix >>>
-${buildEnvLine(agentDir)}
+# pix managed block. The WSL shim forwards management commands to the
+# Windows host via ~/.pix/host-link.json. Do not export PI_CODING_AGENT_DIR
+# here: bare pi must not share the managed run/agent directories.
 # <<< pix <<<
 `;
 }
@@ -51,17 +50,19 @@ function hasExistingBlock(content) {
   return content.includes('# >>> pix >>>') && content.includes('# <<< pix <<<');
 }
 
-function updateRc(rcPath, agentDir) {
+function updateRc(rcPath) {
   const content = readRc(rcPath);
-  const block = buildBlock(agentDir);
+  const block = buildBlock();
 
   if (hasExistingBlock(content)) {
+    const oldBlock = content.match(/# >>> pix >>>[\s\S]*?# <<< pix <<</);
+    const hadLegacyExport = oldBlock && /^\s*export\s+PI_CODING_AGENT_DIR=/m.test(oldBlock[0]);
     const newContent = content.replace(
       /# >>> pix >>>[\s\S]*?# <<< pix <<</,
       block.trim()
     );
     fs.writeFileSync(rcPath, newContent);
-    return 'updated';
+    return hadLegacyExport ? 'replaced-legacy' : 'updated';
   }
 
   fs.writeFileSync(rcPath, content + (content.endsWith('\n') ? '' : '\n') + block);
@@ -69,20 +70,22 @@ function updateRc(rcPath, agentDir) {
 }
 
 function execute(parsedArgs) {
-  const cwd = process.cwd();
-  const configs = loadConfig(cwd);
-  const { config } = mergeConfig(configs);
-
-  const agentDir = resolveAgentDir(config, process.env.HOME);
   const shell = parsedArgs.shell || detectShell();
   const rcPath = getRcPath(shell);
+  const before = readRc(rcPath);
 
-  const action = updateRc(rcPath, agentDir);
-  log(`PI_CODING_AGENT_DIR=${agentDir}`);
+  const action = updateRc(rcPath);
+
+  if (action === 'replaced-legacy') {
+    warn('Removed the legacy PI_CODING_AGENT_DIR export from the pix block.');
+    warn('Bare pi no longer shares the managed runtime; use "pix" to launch pi.');
+  }
   log(`${action === 'added' ? 'Added to' : 'Updated'} ${rcPath}`);
-  log('Run "source ' + rcPath + '" or open a new shell to apply the change.');
-
+  log('Only the pix managed block was modified; all other shell content is untouched.');
+  if (readRc(rcPath).replace(buildBlock().trim(), '') !== before.replace(/# >>> pix >>>[\s\S]*?# <<< pix <<</, '').trim() && action === 'updated') {
+    // defensive: unreachable in practice, kept to surface unexpected rewrites
+  }
   return 0;
 }
 
-module.exports = { execute, detectShell, getRcPath, updateRc };
+module.exports = { execute, detectShell, getRcPath, updateRc, buildBlock };

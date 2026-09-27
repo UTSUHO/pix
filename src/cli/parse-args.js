@@ -1,3 +1,25 @@
+/**
+ * Pix argument parser. Runs BEFORE any WSL bootstrap so command ownership
+ * (Windows host vs backend) can be decided from the parsed result.
+ *
+ * Everything after a literal `--` is passed to pi verbatim.
+ */
+
+const KNOWN_COMMANDS = new Set([
+  'run',
+  'status',
+  'doctor',
+  'migrate',
+  'install-shell-env',
+  'init-guard',
+  'update',
+  'deploy',
+]);
+
+/** Commands that manage the Windows host installation and must never be
+ * silently executed inside a backend. */
+const HOST_COMMANDS = new Set(['update', 'deploy', 'migrate']);
+
 function parseArgs(argv) {
   const result = {
     command: 'run',
@@ -14,22 +36,39 @@ function parseArgs(argv) {
     noProjection: false,
     noMirrorBack: false,
     mirrorBack: false,
+    writeback: null,
+    allowRawWorkspace: false,
+    legacy: false,
     sync: null,
     syncStrategy: null,
     syncKeepAlive: null,
     syncMode: null,
     mntGuard: null,
     dockerfile: null,
+    // update / deploy / migrate --to-host
+    piOnly: false,
+    pluginsOnly: false,
+    target: null,
+    toHost: false,
+    apply: false,
+    includeAuth: false,
     piArgs: [],
   };
 
-  const KNOWN_COMMANDS = new Set(['status', 'doctor', 'migrate', 'install-shell-env', 'init-guard']);
-
+  let passthrough = false;
   let i = 0;
   while (i < argv.length) {
     const arg = argv[i];
 
-    if (arg === '--direct') {
+    if (passthrough) {
+      result.piArgs.push(arg);
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--') {
+      passthrough = true;
+    } else if (arg === '--direct') {
       result.execution = 'direct';
     } else if (arg === '--sandbox') {
       result.execution = 'sandbox';
@@ -47,6 +86,13 @@ function parseArgs(argv) {
       result.noMirrorBack = true;
     } else if (arg === '--mirror-back') {
       result.mirrorBack = true;
+    } else if (arg === '--writeback') {
+      i += 1;
+      result.writeback = argv[i];
+    } else if (arg === '--allow-raw-workspace') {
+      result.allowRawWorkspace = true;
+    } else if (arg === '--legacy') {
+      result.legacy = true;
     } else if (arg === '--sync') {
       result.sync = true;
     } else if (arg === '--no-sync') {
@@ -61,7 +107,6 @@ function parseArgs(argv) {
       i += 1;
       result.syncMode = argv[i];
     } else if (arg === '--mnt-guard') {
-      // Deprecated no-op: the guard is injected by default.
       result.mntGuard = true;
     } else if (arg === '--no-mnt-guard') {
       result.mntGuard = false;
@@ -80,6 +125,19 @@ function parseArgs(argv) {
     } else if (arg === '--shell') {
       i += 1;
       result.shell = argv[i];
+    } else if (arg === '--pi-only') {
+      result.piOnly = true;
+    } else if (arg === '--plugins-only') {
+      result.pluginsOnly = true;
+    } else if (arg === '--target') {
+      i += 1;
+      result.target = argv[i];
+    } else if (arg === '--to-host') {
+      result.toHost = true;
+    } else if (arg === '--apply') {
+      result.apply = true;
+    } else if (arg === '--include-auth') {
+      result.includeAuth = true;
     } else if (arg === '--help' || arg === '-h') {
       result.help = true;
     } else if (result.command === 'run' && !result.piArgs.length && KNOWN_COMMANDS.has(arg)) {
@@ -94,4 +152,4 @@ function parseArgs(argv) {
   return result;
 }
 
-module.exports = { parseArgs };
+module.exports = { parseArgs, KNOWN_COMMANDS, HOST_COMMANDS };

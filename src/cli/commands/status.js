@@ -1,154 +1,123 @@
+const fs = require('fs');
+const path = require('path');
+const { resolveHostContext, readPublishedBody, readCurrentRelease } = require('../../host/resolve-home');
+const { readSpec } = require('../../host/update-body');
+const { listUncollectedRuns } = require('../../runtime/compose-agent');
+const { readHostLink } = require('../../host/bridge');
+const { getDefaultDistro, hasCommand, isInsideWsl } = require('../../platform/wsl');
 const { loadConfig } = require('../../config/load-config');
 const { mergeConfig } = require('../../config/merge-config');
-const { getDefaultDistro, hasCommand, isInsideWsl } = require('../../platform/wsl');
-const { classifyPath, isNtfsWorkspace } = require('../../platform/paths');
-const { resolveRuntimeRoot, resolveAgentDir } = require('../../runtime/resolve-runtime');
-const { guardStatus } = require('../../runtime/install-guard');
-const { imageExists } = require('../../docker/image');
-const { isProjectionNeeded, resolveProjectedPath } = require('../../workspace/projection');
-const { isSyncEnabled } = require('../../workspace/sync');
-const {
-  resolveMutagenPath,
-  getMutagenVersion,
-  computeSessionName,
-  sessionExists,
-  getSessionState,
-} = require('../../workspace/mutagen');
-const { spawnSync } = require('child_process');
 
-function checkDocker() {
-  const result = spawnSync('docker', ['--version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
-  return result.status === 0;
-}
+/**
+ * pix status — host-centric summary.
+ * Shows the host release, per-target ready revisions (when reachable),
+ * pending/stale state, and uncollected runs. Never reports "all updated"
+ * when a backend lags behind the host release.
+ */
+async function execute(parsedArgs, options = {}) {
+  const ctx = resolveHostContext({ ensure: false });
+  const out = options.print || console.log;
 
-function getWorkspaceStorageType(workspace) {
-  if (isNtfsWorkspace(workspace)) return 'Windows NTFS (slow)';
-  const cls = classifyPath(workspace);
-  if (cls === 'wsl' || cls === 'linux') return 'WSL filesystem';
-  return 'unknown';
-}
+  out(`Pix home: ${ctx.pixHome}`);
+  out(`Host id: ${ctx.hostId || '(not initialized — run "pix update")'}`);
 
-function getPiVersionWsl(distro) {
-  if (!hasCommand('pi', distro)) return 'not installed';
+  const current = readCurrentRelease(ctx);
+  const published = current ? readPublishedBody(ctx) : null;
+  if (published) {
+    out(`Host body release: ${published.manifest.bodyRevision.slice(0, 12)}`);
+    out(`  Pi: ${published.manifest.pi.packageName}@${published.manifest.pi.exactVersion}`);
+    for (const p of published.manifest.plugins || []) {
+      out(`  Plugin ${p.id}: ${p.resolvedVersion || p.resolvedCommit || (p.sourceDigest || '').slice(0, 12)} (${p.sourceKind})`);
+    }
+    if (current.previousRevision) {
+      out(`  Previous release (rollback): ${current.previousRevision.slice(0, 12)}`);
+    }
+  } else {
+    out('Host body release: (none — run "pix update")');
+  }
+
+  const { spec } = readSpec(ctx);
+  out(`Spec: pi=${spec.pi.packageName}@${spec.pi.range} (${spec.pi.updatePolicy || 'latest'}), ${(spec.plugins || []).length} plugin(s)`);
+
+  // Backend state (best-effort; unreachability is reported, not fatal).
+  const configs = loadConfig(process.cwd());
+  const { config } = mergeConfig(configs);
+  const distro = parsedArgs.distro || config.wsl?.distro || getDefaultDistro();
+  out(`Backend (WSL): ${distro || 'unavailable'}`);
 
   if (isInsideWsl()) {
-    const result = spawnSync('pi', ['--version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
-    if (result.status !== 0 || !result.stdout) return 'unknown';
-    return result.stdout.trim() || 'unknown';
-  }
-
-  const { runWsl } = require('../../platform/wsl');
-  const result = runWsl(distro, ['bash', '-lic', 'pi --version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
-  if (result.status !== 0 || !result.stdout) return 'unknown';
-  return result.stdout.trim() || 'unknown';
-}
-
-function getPiVersionDocker(imageName) {
-  if (!imageExists(imageName)) return 'image missing';
-  const result = spawnSync('docker', ['run', '--rm', imageName, 'pi', '--version'], {
-    encoding: 'utf8',
-    shell: false,
-    stdio: 'pipe',
-  });
-  if (result.status !== 0 || !result.stdout) return 'unknown';
-  return result.stdout.trim() || 'unknown';
-}
-
-function execute(parsedArgs) {
-  const cwd = process.cwd();
-  const configs = loadConfig(cwd);
-  const { config } = mergeConfig(configs);
-
-  if (parsedArgs.distro) {
-    config.wsl = config.wsl || {};
-    config.wsl.distro = parsedArgs.distro;
-  }
-
-  if (parsedArgs.noProjection) {
-    config.workspace = config.workspace || {};
-    config.workspace.projection = false;
-  }
-
-  if (parsedArgs.mirrorBack) {
-    config.workspace = config.workspace || {};
-    config.workspace.mirrorBack = true;
-  }
-
-  if (parsedArgs.noMirrorBack) {
-    config.workspace = config.workspace || {};
-    config.workspace.mirrorBack = false;
-  }
-
-  const distro = config.wsl?.distro || getDefaultDistro() || 'unknown';
-  const sourceWorkspace = cwd;
-  const runtimeRoot = resolveRuntimeRoot(config, process.env.HOME);
-  const agentDir = resolveAgentDir(config, process.env.HOME);
-  const piAvailable = hasCommand('pi', distro);
-  const dockerAvailable = checkDocker();
-  const imageName = config.container?.image || 'pix-pi-sandbox';
-  const imageAvailable = dockerAvailable && imageExists(imageName);
-  const projectionNeeded = isProjectionNeeded(sourceWorkspace, config);
-  const projectedWorkspace = projectionNeeded
-    ? resolveProjectedPath(sourceWorkspace, config, process.env.HOME)
-    : null;
-
-  console.log(`Execution: ${config.execution}`);
-  console.log(`WSL distro: ${distro}`);
-  console.log(`Runtime root: ${runtimeRoot}`);
-  console.log(`Pi agent dir: ${agentDir}`);
-  const guard = guardStatus(agentDir, config);
-  const guardMode = parsedArgs.mntGuard === false ? 'disabled for this run (--no-mnt-guard)' : 'injected by default';
-  console.log(`Mnt guard: ${guardMode}${guard.installed ? ` (installed v${guard.version})` : ' (not installed)'}`);
-  if (guard.template) {
-    console.log(`Mnt guard template: ${guard.template.origin} (${guard.template.source})`);
-  }
-  console.log(`Pi available: ${piAvailable ? 'yes' : 'no'}`);
-  if (piAvailable) {
-    console.log(`Pi version (WSL): ${getPiVersionWsl(distro)}`);
-  }
-  console.log(`Docker available: ${dockerAvailable ? 'yes' : 'no'}`);
-  console.log(`Sandbox image: ${imageName} (${imageAvailable ? 'present' : 'missing'})`);
-  if (imageAvailable) {
-    console.log(`Pi version (image): ${getPiVersionDocker(imageName)}`);
-  }
-  console.log(`Workspace source: ${sourceWorkspace}`);
-  if (projectedWorkspace) {
-    console.log(`Projected workspace: ${projectedWorkspace}`);
-    console.log(`Workspace storage: WSL filesystem (projected)`);
-    console.log(`Mirror-back: ${config.workspace?.mirrorBack ? 'yes' : 'no'}`);
-  } else {
-    console.log(`Workspace storage: ${getWorkspaceStorageType(sourceWorkspace)}`);
-  }
-
-  const sync = config.workspace?.sync || {};
-  console.log(`Sync enabled: ${sync.enabled !== false ? 'yes' : 'no'}`);
-  if (sync.enabled !== false) {
-    console.log(`Sync strategy: ${sync.strategy || 'mutagen'}`);
-    console.log(`Sync mode: ${sync.mode || 'two-way-resolved'}`);
-    console.log(`Sync keep-alive: ${sync.keepAlive || 'terminate'}`);
-  }
-
-  const mutagenPath = resolveMutagenPath();
-  const mutagenAvailable = mutagenPath !== null;
-  console.log(`Mutagen available: ${mutagenAvailable ? 'yes' : 'no'}`);
-  if (mutagenAvailable) {
-    console.log(`Mutagen path: ${mutagenPath}`);
-    console.log(`Mutagen version: ${getMutagenVersion(mutagenPath) || 'unknown'}`);
-    if (projectedWorkspace) {
-      const sessionName = computeSessionName(sourceWorkspace);
-      const exists = sessionExists(mutagenPath, sessionName);
-      console.log(`Mutagen session: ${sessionName} (${exists ? getSessionState(mutagenPath, sessionName) || 'present' : 'not active'})`);
+    reportLocalTarget(out, process.env.HOME, published);
+    const link = readHostLink();
+    out(`Host binding: ${link ? `host ${link.hostId}` : 'none (management commands will fail closed)'}`);
+  } else if (distro && options.probeTarget !== false) {
+    try {
+      const { createTarget } = require('../../platform/target');
+      const target = createTarget({ type: 'wsl', distro });
+      reportLocalTarget(out, target.home, published, target);
+    } catch (err) {
+      out(`  Target probe unavailable: ${err.message}`);
     }
   }
 
-  if (isNtfsWorkspace(agentDir)) {
-    console.log('Warning: agent dir is on Windows NTFS; Direct/Sandbox performance may suffer.');
-  }
-  if (isNtfsWorkspace(sourceWorkspace) && !projectionNeeded) {
-    console.log('Warning: workspace is on Windows NTFS and projection is disabled; Sandbox file operations may be slower.');
+  return 0;
+}
+
+function reportLocalTarget(out, home, published, target = null) {
+  const root = path.join(home, '.pix');
+  const runtimesDir = path.join(root, 'runtimes');
+  const readEntry = (p) => (target ? safeRead(target, p) : safeReadLocal(p));
+
+  let readyRevisions = [];
+  if (target ? target.existsOnTarget(runtimesDir) : fs.existsSync(runtimesDir)) {
+    // Ready revisions are derivable from releases + ready markers; we list
+    // ready.json bodyRevision values without walking node_modules.
+    const listCmd = target ? null : fs.readdirSync(runtimesDir);
+    if (listCmd) {
+      for (const entry of listCmd) {
+        const ready = readEntry(path.join(runtimesDir, entry, 'ready.json'));
+        if (ready) {
+          try {
+            readyRevisions.push(JSON.parse(ready).bodyRevision);
+          } catch { /* ignore */ }
+        }
+      }
+    }
   }
 
-  return 0;
+  if (!published) return;
+  const current = published.manifest.bodyRevision;
+  if (readyRevisions.length === 0) {
+    out(`  Target runtimes: none ready — ${current.slice(0, 12)} pending`);
+  } else {
+    for (const rev of readyRevisions) {
+      const state = rev === current ? 'ready (current)' : `ready (STALE — host has ${current.slice(0, 12)})`;
+      out(`  Target runtime: ${rev.slice(0, 12)} ${state}`);
+    }
+    if (!readyRevisions.includes(current)) {
+      out(`  NOTE: host release ${current.slice(0, 12)} is pending on this target.`);
+    }
+  }
+
+  const uncollected = target ? [] : listUncollectedRuns(root);
+  for (const run of uncollected) {
+    out(`  UNCOLLECTED run: ${run.runId} (${run.directory})`);
+  }
+}
+
+function safeReadLocal(p) {
+  try {
+    return fs.readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function safeRead(target, p) {
+  try {
+    return target.readFileOnTarget(p);
+  } catch {
+    return null;
+  }
 }
 
 module.exports = { execute };

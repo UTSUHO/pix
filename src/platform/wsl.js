@@ -180,6 +180,7 @@ module.exports = {
   isWindows,
   isInsideWsl,
   wslBin,
+  decodeWslOutput,
   runWsl,
   getDefaultDistro,
   listDistros,

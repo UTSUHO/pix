@@ -1,11 +1,9 @@
-const path = require('path');
 const { run } = require('../process/spawn');
-const { ensureImage } = require('../docker/image');
+const { ensureImage, imageMatchesManifest, getImageId } = require('../docker/image');
 const { log } = require('../cli/output');
 
 function collectEnvVars(config, envAll) {
   const env = {};
-
   if (envAll) {
     Object.assign(env, process.env);
   } else {
@@ -15,69 +13,101 @@ function collectEnvVars(config, envAll) {
       }
     }
   }
-
   return env;
 }
 
-function buildDockerArgs(workspace, agentDir, piArgs, config, options) {
-  const imageName = config.container?.image || 'pix-pi-sandbox';
+/**
+ * Build the sandbox docker run argv.
+ *
+ * Mount boundary (hard rules):
+ *   /opt/pix/body    — inside the image, read-only program area
+ *   /workspace       — the WSL Linux-local workspace copy (rw or ro)
+ *   /run/pix-agent   — THIS run's agent dir (config/state), rw
+ * Never: Windows master install, global profile, whole HOME, docker.sock,
+ * or any host management channel.
+ */
+function buildDockerArgs(runtime, runCtx, config, options = {}) {
+  const imageName = options.imageName;
   const network = config.container?.network || 'bridge';
   const workspaceAccess = config.container?.workspaceAccess || 'read-write';
   const extraRunOptions = config.container?.extraRunOptions || [];
-  const { dryRun = false, rebuild = false, envAll = false } = options;
+  const transport = runCtx.transport || 'tty';
 
-  const args = [
-    'run',
-    '--rm',
-    '-it',
-    '--workdir',
-    '/workspace',
-  ];
+  const args = ['run', '--rm'];
+
+  // TTY branch: interactive terminal. Pipe branch: no -t (protocol stdout
+  // must never flow through a pty); keep -i so stdin scripts reach pi.
+  if (transport === 'tty') {
+    args.push('-it');
+  } else {
+    args.push('-i');
+  }
+
+  args.push('--workdir', '/workspace');
 
   if (network) {
     args.push('--network', network);
   }
 
-  const readOnly = workspaceAccess === 'read-only' ? ',readonly' : '';
-  args.push('--mount', `type=bind,src=${workspace},dst=/workspace${readOnly}`);
-  args.push('--mount', `type=bind,src=${agentDir},dst=${agentDir}`);
+  // Non-privileged user matching the workspace owner when provided.
+  if (runCtx.runAsUser) {
+    args.push('--user', runCtx.runAsUser);
+  }
 
-  const env = collectEnvVars(config, envAll);
-  env.PI_CODING_AGENT_DIR = agentDir;
+  const readOnly = workspaceAccess === 'read-only' ? ',readonly' : '';
+  args.push('--mount', `type=bind,src=${runCtx.workspaceRoot},dst=/workspace${readOnly}`);
+  args.push('--mount', `type=bind,src=${runCtx.agentDir},dst=/run/pix-agent`);
+
+  const env = collectEnvVars(config, options.envAll);
+  env.PI_CODING_AGENT_DIR = '/run/pix-agent';
   for (const [key, value] of Object.entries(env)) {
     args.push('--env', `${key}=${value}`);
   }
 
   args.push(...extraRunOptions);
   args.push(imageName);
-  args.push('pi');
-  args.push(...piArgs);
+  args.push(...runCtx.piArgs);
 
   return args;
 }
 
-async function execute(workspace, agentDir, piArgs, config, options = {}) {
-  const { dryRun = false, rebuild = false } = options;
-  const imageName = config.container?.image || 'pix-pi-sandbox';
-
-  if (!dryRun) {
-    ensureImage(config, { rebuild });
+/**
+ * Sandbox executor. The image must match the published body manifest —
+ * a pre-existing tag is never accepted as proof of version. Docker failures
+ * are final: no fallback to direct.
+ */
+async function execute(runtime, runCtx, config, options = {}) {
+  const { dryRun = false, rebuild = false, manifest } = options;
+  if (!manifest) {
+    const err = new Error('RUNTIME_DEPLOY_FAILED: sandbox requires the published body manifest');
+    err.code = 'RUNTIME_DEPLOY_FAILED';
+    throw err;
   }
 
-  const dockerArgs = buildDockerArgs(workspace, agentDir, piArgs, config, options);
+  const imageName = ensureImage(config, { rebuild, manifest, releaseDir: options.releaseDir });
+
+  if (!imageMatchesManifest(imageName, manifest)) {
+    const err = new Error(
+      `RUNTIME_VERSION_MISMATCH: image ${imageName} does not match body revision ${manifest.bodyRevision}. Rebuild with --rebuild.`
+    );
+    err.code = 'RUNTIME_VERSION_MISMATCH';
+    throw err;
+  }
+
+  const imageId = getImageId(imageName);
+  const dockerArgs = buildDockerArgs(runtime, runCtx, config, { ...options, imageName });
 
   if (dryRun) {
-    console.log('docker', dockerArgs.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' '));
-    return 0;
+    console.error(`[pix] docker ${dockerArgs.join(' ')}`);
+    return { code: 0, signal: null, imageId };
   }
 
-  log('Launching pi in Docker sandbox...');
+  log(`Launching pi in Docker sandbox (image ${imageName}${imageId ? `, id ${imageId.slice(0, 19)}` : ''})...`);
   const result = await run('docker', dockerArgs, {
     env: process.env,
     shell: false,
   });
-
-  return result.code ?? 0;
+  return { ...result, imageId };
 }
 
-module.exports = { execute, buildDockerArgs };
+module.exports = { execute, buildDockerArgs, collectEnvVars };

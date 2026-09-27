@@ -1,138 +1,135 @@
 #!/usr/bin/env node
 
-const { spawnSync, spawn } = require('child_process');
-const path = require('path');
-
-const { isWindows, isInsideWsl, getDefaultDistro, toWslPath, hasCommand } = require('../src/platform/wsl');
-const { parseArgs } = require('../src/cli/parse-args');
-const { fatal } = require('../src/cli/output');
-const runCommand = require('../src/cli/commands/run');
-const statusCommand = require('../src/cli/commands/status');
-const doctorCommand = require('../src/cli/commands/doctor');
-const migrateCommand = require('../src/cli/commands/migrate');
-const installShellEnvCommand = require('../src/cli/commands/install-shell-env');
-const initGuardCommand = require('../src/cli/commands/init-guard');
+const { isWindows, isInsideWsl } = require('../src/platform/wsl');
+const { parseArgs, HOST_COMMANDS } = require('../src/cli/parse-args');
+const { fatal, warn } = require('../src/cli/output');
+const bridge = require('../src/host/bridge');
 
 function printHelp() {
   console.log(`Usage: pix [options] [command] [pi-args...]
 
 Commands:
-  status              Show pix configuration and environment status
-  doctor              Diagnose pix environment issues
-  migrate             Migrate Windows .pi/agent to the WSL canonical runtime
-  install-shell-env   Add PI_CODING_AGENT_DIR to shell rc file
-  init-guard          Copy the default /mnt guard template to ~/.pix/extensions/ for customization
+  (default)           Launch pi via the managed pipeline (host-orchestrated)
+  update              Update the managed Pi core + plugins on THIS host and
+                      publish an immutable release (never enters WSL/Docker)
+  deploy              Stage the current release onto a backend (--target wsl|docker|local)
+  status              Show host release, backend copies and pending state
+  doctor              Diagnose environment issues
+  migrate             Migrate runtimes (legacy Windows->WSL; --to-host for the new layout)
+  install-shell-env   Manage the pix block in your shell rc file
+  init-guard          Copy the default guard template for customization
 
 Options:
-  --direct                  Force WSL direct execution
-  --sandbox                 Force Docker sandbox execution
+  --direct                  Force direct execution
+  --sandbox                 Force sandbox execution
+  --legacy                Use the explicit v0.3 compatibility pipeline
   --distro <name>           Use the specified WSL distro
-  --dry-run                 Print the command that would run instead of executing it
-  --rebuild                 Force rebuild the sandbox Docker image
+  --dry-run                 Print what would happen instead of doing it
+  --rebuild                 Force rebuild of the sandbox image
   --env-all                 Forward all environment variables into the container
   --no-projection           Disable workspace projection for this run
-  --mirror-back             Mirror projected workspace back to Windows source after exit (default)
+  --mirror-back             Mirror the projected workspace back after exit
   --no-mirror-back          Disable mirror-back for this run
-  --sync                    Enable Mutagen continuous sync (default)
-  --no-sync                 Disable Mutagen continuous sync; use rsync/cp projection
+  --writeback <policy>      Workspace writeback: realtime or review
+  --allow-raw-workspace     Allow running on the raw Windows path if projection fails
+  --sync / --no-sync        Enable/disable Mutagen continuous sync
   --sync-strategy <name>    Sync strategy: mutagen or projection
-  --sync-keep-alive <mode>  Mutagen session cleanup: terminate, pause, or running
-  --sync-mode <mode>        Mutagen sync mode: two-way-safe, two-way-resolved, one-way-safe, one-way-replica
-  --no-mnt-guard            Do not inject the /mnt guard for this run (removes the installed extension)
-  --dockerfile <path>       Use a custom Dockerfile for the sandbox image
-  --source <path>           Source .pi/agent directory for migrate
+  --sync-keep-alive <mode>  Mutagen cleanup: terminate, pause, or running
+  --sync-mode <mode>        Mutagen mode: two-way-safe (default), two-way-resolved, ...
+  --no-mnt-guard            Do not inject the guard for this run
+  --pi-only                 update: only the Pi core
+  --plugins-only            update: only managed plugins
+  --target <name>           deploy target: wsl, docker, local
+  --to-host                 migrate: import legacy runtimes into this host
+  --apply                   migrate --to-host: apply (default is dry-run report)
+  --source <path>           migrate source directory
   --win-user <name>         Windows username for migrate source detection
-  --include-extensions      Migrate extension source during migrate
+  --include-auth            migrate: include credentials (never printed)
+  --include-extensions      migrate: include extension source
   --shell <shell>           Shell for install-shell-env (bash, zsh, fish)
   --help, -h                Show this help message
 
-Any other arguments are passed through to pi.
+Anything after "--" is passed to pi verbatim.
 
 Configuration:
-  ~/.pixrc.json     User configuration
-  .pix.json         Project configuration (overrides user config)
+  <PIX_HOME>/config.json   Host user configuration (PIX_HOME defaults to
+                           %USERPROFILE%\\.pix on Windows, ~/.pix elsewhere)
+  .pix.json                Project configuration (can only narrow privileges)
 `);
-}
-
-function reinvokeInWsl(argv) {
-  const distro = process.env.PIX_DISTRO || getDefaultDistro();
-  if (!distro) {
-    fatal('Could not determine default WSL distro. Set PIX_DISTRO or configure wsl.distro.');
-  }
-
-  const cwd = process.cwd();
-  const wslCwd = toWslPath(cwd, distro);
-  if (!wslCwd) {
-    fatal(`Failed to convert current directory to WSL path: ${cwd}`);
-  }
-
-  const entry = __filename;
-  const wslEntry = toWslPath(entry, distro);
-  if (!wslEntry) {
-    fatal(`Failed to convert pix entry path to WSL path: ${entry}`);
-  }
-
-  const packageRoot = path.resolve(__dirname, '..');
-  const packageRootWsl = toWslPath(packageRoot, distro);
-  if (!packageRootWsl) {
-    fatal(`Failed to convert package root to WSL path: ${packageRoot}`);
-  }
-
-  if (!hasCommand('node', distro)) {
-    fatal(`node is not available in WSL distro "${distro}". Install Node.js in WSL to use pix.`);
-  }
-
-  const command = `export PIX_PACKAGE_ROOT="${packageRootWsl}" && cd "${wslCwd}" && exec node "${wslEntry}" ${argv.map((a) => quoteShellArg(a)).join(' ')}`;
-  const args = ['-d', distro, '--', 'bash', '-lic', command];
-
-  return new Promise((resolve, reject) => {
-    const child = spawn('wsl.exe', args, { stdio: 'inherit', shell: false });
-    child.on('error', reject);
-    child.on('close', (code, signal) => resolve({ code, signal }));
-  });
-}
-
-function quoteShellArg(arg) {
-  if (/^[a-zA-Z0-9_\-./:=]+$/.test(arg)) return arg;
-  return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 async function main() {
   const argv = process.argv.slice(2);
+  const parsed = parseArgs(argv);
 
-  if (argv.includes('--help') || argv.includes('-h')) {
+  if (parsed.help) {
     printHelp();
     return 0;
   }
 
-  if (isWindows() && !isInsideWsl()) {
-    const result = await reinvokeInWsl(argv);
-    return result.code ?? 0;
+  const onWindowsHost = isWindows() && !isInsideWsl();
+  const inWsl = isInsideWsl();
+
+  // Bridge loop protection: a forwarded management request must execute on
+  // the host; it must never be forwarded onward.
+  if (bridge.isBridgeRequest() && !onWindowsHost) {
+    fatal('HOST_UNAVAILABLE: bridge loop detected; refusing to forward a forwarded request.');
   }
 
-  const parsed = parseArgs(argv);
-
-  if (parsed.command === 'status') {
-    return statusCommand.execute(parsed);
+  // --- WSL shim behavior ---------------------------------------------------
+  if (inWsl && !bridge.isBridgeRequest()) {
+    if (HOST_COMMANDS.has(parsed.command) || parsed.command === 'status' || parsed.command === 'doctor') {
+      // Management commands belong to the Windows host. Forward via the
+      // binding; fail closed when unbound — never a local Linux upgrade.
+      try {
+        return await bridge.forwardToHost(parsed);
+      } catch (err) {
+        if (err.code === 'HOST_UNAVAILABLE') {
+          fatal(err.message);
+        }
+        throw err;
+      }
+    }
+    if (parsed.command === 'run' && !parsed.legacy) {
+      const link = bridge.readHostLink();
+      if (link) {
+        // Managed run: orchestrated by the Windows host.
+        try {
+          return await bridge.forwardToHost({ ...parsed, command: 'run' });
+        } catch (err) {
+          if (err.code === 'HOST_UNAVAILABLE') fatal(err.message);
+          throw err;
+        }
+      }
+      fatal(
+        'This WSL environment is not bound to a Windows pix host.\n' +
+        '  - Run pix on the Windows host, or\n' +
+        '  - Run "pix migrate --to-host" on Windows to set up the managed layout, or\n' +
+        '  - Use "pix --legacy" for the explicit v0.3 compatibility pipeline.'
+      );
+    }
   }
 
-  if (parsed.command === 'doctor') {
-    return doctorCommand.execute(parsed);
+  // --- command dispatch (host side, or local commands anywhere) ------------
+  switch (parsed.command) {
+    case 'update':
+      return require('../src/cli/commands/update').execute(parsed);
+    case 'deploy':
+      return require('../src/cli/commands/deploy').execute(parsed);
+    case 'status':
+      return require('../src/cli/commands/status').execute(parsed);
+    case 'doctor':
+      return require('../src/cli/commands/doctor').execute(parsed);
+    case 'migrate':
+      return require('../src/cli/commands/migrate').execute(parsed);
+    case 'install-shell-env':
+      return require('../src/cli/commands/install-shell-env').execute(parsed);
+    case 'init-guard':
+      return require('../src/cli/commands/init-guard').execute(parsed);
+    case 'run':
+    default:
+      return require('../src/cli/commands/run').execute(parsed);
   }
-
-  if (parsed.command === 'migrate') {
-    return migrateCommand.execute(parsed);
-  }
-
-  if (parsed.command === 'install-shell-env') {
-    return installShellEnvCommand.execute(parsed);
-  }
-
-  if (parsed.command === 'init-guard') {
-    return initGuardCommand.execute(parsed);
-  }
-
-  return runCommand.execute(parsed);
 }
 
 main()

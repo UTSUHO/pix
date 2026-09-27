@@ -53,6 +53,14 @@ function validateConfig(config) {
       errors.push('workspace.projection must be a boolean.');
     }
 
+    if (config.workspace.writeback !== undefined && !['realtime', 'review'].includes(config.workspace.writeback)) {
+      errors.push('workspace.writeback must be "realtime" or "review".');
+    }
+
+    if (config.workspace.sync && config.workspace.sync.mode === 'two-way-resolved') {
+      warnings.push('workspace.sync.mode "two-way-resolved" lets the WSL replica win conflicts silently. Consider "two-way-safe".');
+    }
+
     if (config.workspace.projectionRoot !== undefined && typeof config.workspace.projectionRoot !== 'string') {
       errors.push('workspace.projectionRoot must be a string.');
     }

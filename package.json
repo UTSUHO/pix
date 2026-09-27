@@ -1,6 +1,6 @@
 {
   "name": "@reiutsuho/pix",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A Windows CLI launcher for @earendil-works/pi-coding-agent that runs Pi inside WSL2 and an optional Docker sandbox, sharing a single canonical runtime.",
   "main": "bin/pix.js",
   "publishConfig": {
@@ -16,7 +16,7 @@
     "assets/"
   ],
   "scripts": {
-    "test": "node bin/pix.js --help"
+    "test": "node --test tests/*.test.js"
   },
   "keywords": [
     "pi-coding-agent",

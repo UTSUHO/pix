@@ -1,243 +1,123 @@
-const { loadConfig } = require('../../config/load-config');
-const { mergeConfig } = require('../../config/merge-config');
-const { validateConfig } = require('../../config/schema');
-const { getDefaultDistro, listDistros, isWslAvailable, hasCommand, isInsideWsl } = require('../../platform/wsl');
-const { isNtfsWorkspace, expandTilde } = require('../../platform/paths');
-const { resolveAgentDir } = require('../../runtime/resolve-runtime');
-const { imageExists } = require('../../docker/image');
-const { detectCopyTool } = require('../../workspace/projection');
-const { isSyncEnabled } = require('../../workspace/sync');
-const {
-  resolveMutagenPath,
-  getMutagenVersion,
-  listPixSessions,
-} = require('../../workspace/mutagen');
-const { log, warn } = require('../output');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { resolveHostContext, readPublishedBody } = require('../../host/resolve-home');
+const { listUncollectedRuns } = require('../../runtime/compose-agent');
+const { collectBodyGarbage } = require('../../runtime/gc');
+const { readHostLink } = require('../../host/bridge');
+const { isInsideWsl, getDefaultDistro } = require('../../platform/wsl');
+const { resolveMutagenPath, getMutagenVersion, listPixSessions } = require('../../workspace/mutagen');
+const { detectCopyTool } = require('../../workspace/projection');
+const { loadConfig } = require('../../config/load-config');
+const { mergeConfig } = require('../../config/merge-config');
 
-function checkDocker() {
-  const result = spawnSync('docker', ['--version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
-  return result.status === 0;
-}
+/**
+ * pix doctor — environment diagnostics with recovery guidance.
+ * Checks: host layout, published release integrity, Node/Pi requirements,
+ * target tooling, real filesystem placement, sync tool state, uncollected
+ * runs and GC-safe cleanup candidates.
+ */
+async function execute(parsedArgs, options = {}) {
+  const out = options.print || console.log;
+  const problems = [];
 
-function checkWslIntegration(distro) {
+  const ctx = resolveHostContext({ ensure: false });
+  check(out, problems, ctx.hostId != null,
+    `Host initialized (${ctx.pixHome})`,
+    `Host not initialized. Run "pix update" to create ${ctx.pixHome}.`);
+
+  const published = readPublishedBody(ctx);
+  check(out, problems, published != null,
+    'A body release is published',
+    'No published body. Run "pix update".');
+
+  if (published) {
+    const dir = published.directory;
+    check(out, problems,
+      fs.existsSync(path.join(dir, 'package-lock.json')) && fs.existsSync(path.join(dir, 'node_modules')),
+      `Release ${published.manifest.bodyRevision.slice(0, 12)} has lock + install`,
+      `Release directory incomplete: ${dir}. Re-run "pix update".`);
+
+    // Host Node vs Pi engines.
+    const engines = published.manifest.pi.nodeRequirement;
+    if (engines) {
+      const semver = require('../../host/semver');
+      check(out, problems, semver.satisfies(process.versions.node, engines),
+        `Host Node ${process.versions.node} satisfies Pi requirement "${engines}"`,
+        `Host Node ${process.versions.node} does NOT satisfy Pi requirement "${engines}". Install a compatible Node; pix does not upgrade system Node automatically.`);
+    }
+  }
+
+  // Tooling.
+  check(out, problems, detectCopyTool() === 'rsync',
+    'rsync available for workspace projection',
+    'rsync missing; projection will fall back to cp (slower, no incremental delete-align).');
+  const mutagenPath = resolveMutagenPath();
+  if (mutagenPath) {
+    out(`  ok: mutagen ${getMutagenVersion(mutagenPath) || 'unknown'} at ${mutagenPath}`);
+    const sessions = listPixSessions(mutagenPath);
+    for (const s of sessions) {
+      out(`  note: mutagen session "${s}" exists (stale sessions hold workspace copies; terminate if unused).`);
+    }
+  } else {
+    out('  note: mutagen not installed; sync falls back to one-shot projection.');
+  }
+
+  // Docker (only relevant for sandbox users).
+  const configs = loadConfig(process.cwd());
+  const { config } = mergeConfig(configs);
+  if (config.execution === 'sandbox') {
+    const docker = spawnSync('docker', ['--version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
+    check(out, problems, docker.status === 0,
+      'docker available for sandbox backend',
+      'sandbox execution configured but docker is unavailable.');
+  }
+
+  // Target-side state (local when inside WSL).
   if (isInsideWsl()) {
-    const result = spawnSync('docker', ['--version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
-    return result.status === 0;
-  }
-
-  const { runWsl } = require('../../platform/wsl');
-  const result = runWsl(distro, ['bash', '-lic', 'docker --version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
-  return result.status === 0;
-}
-
-function hasRsync() {
-  return detectCopyTool() === 'rsync';
-}
-
-function getPiVersionWsl(distro) {
-  if (!hasCommand('pi', distro)) return null;
-
-  if (isInsideWsl()) {
-    const result = spawnSync('pi', ['--version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
-    if (result.status !== 0 || !result.stdout) return null;
-    return result.stdout.trim() || null;
-  }
-
-  const { runWsl } = require('../../platform/wsl');
-  const result = runWsl(distro, ['bash', '-lic', 'pi --version'], { encoding: 'utf8', shell: false, stdio: 'pipe' });
-  if (result.status !== 0 || !result.stdout) return null;
-  return result.stdout.trim() || null;
-}
-
-function getPiVersionDocker(imageName) {
-  if (!imageExists(imageName)) return null;
-  const result = spawnSync('docker', ['run', '--rm', imageName, 'pi', '--version'], {
-    encoding: 'utf8',
-    shell: false,
-    stdio: 'pipe',
-  });
-  if (result.status !== 0 || !result.stdout) return null;
-  return result.stdout.trim() || null;
-}
-
-function canMountRuntime(agentDir, imageName) {
-  if (!imageExists(imageName)) return null;
-  const result = spawnSync(
-    'docker',
-    ['run', '--rm', '--mount', `type=bind,src=${agentDir},dst=${agentDir}`, imageName, 'true'],
-    { encoding: 'utf8', shell: false, stdio: 'pipe' }
-  );
-  return result.status === 0;
-}
-
-function execute(parsedArgs) {
-  const cwd = process.cwd();
-  const configs = loadConfig(cwd);
-  const { config, warnings: configWarnings } = mergeConfig(configs);
-
-  if (parsedArgs.distro) {
-    config.wsl = config.wsl || {};
-    config.wsl.distro = parsedArgs.distro;
-  }
-
-  const issues = [];
-  const checks = [];
-
-  const validation = validateConfig(config);
-  for (const message of validation.warnings) {
-    warn(message);
-  }
-  if (!validation.valid) {
-    for (const message of validation.errors) {
-      issues.push(message);
+    const root = path.join(process.env.HOME, '.pix');
+    const link = readHostLink();
+    check(out, problems, link != null,
+      `Host binding present (host ${link && link.hostId})`,
+      'No host binding (~/.pix/host-link.json). Management commands from WSL fail closed. Deploy from the host to create it.');
+    const uncollected = listUncollectedRuns(root);
+    for (const run of uncollected) {
+      problems.push('uncollected-run');
+      out(`  PROBLEM: uncollected run ${run.runId} at ${run.directory}`);
+      out('    recovery: the run directory is preserved; review and remove manually after recovering changes.');
+    }
+  } else {
+    const distro = parsedArgs.distro || config.wsl?.distro || getDefaultDistro();
+    if (!distro) {
+      out('  note: no WSL distro detected from host; backend checks skipped.');
     }
   }
 
-  if (!Array.isArray(config.envAllowlist) || config.envAllowlist.length === 0) {
-    issues.push('envAllowlist is empty or invalid.');
-  }
-
-  const wslAvailable = isWslAvailable();
-  checks.push(`WSL installed: ${wslAvailable ? 'yes' : 'no'}`);
-  if (!wslAvailable) {
-    issues.push('WSL is not installed or wsl.exe is not in PATH.');
-  }
-
-  const distro = config.wsl?.distro || getDefaultDistro();
-  const distros = listDistros();
-  checks.push(`WSL distro: ${distro || 'not found'} (${distros.length} distros available)`);
-  if (!distro) {
-    issues.push('No default WSL distro found. Install a distro or set wsl.distro.');
-  } else if (!distros.includes(distro)) {
-    issues.push(`Configured distro "${distro}" is not available.`);
-  }
-
-  const dockerAvailable = checkDocker();
-  checks.push(`Docker available: ${dockerAvailable ? 'yes' : 'no'}`);
-  if (!dockerAvailable) {
-    issues.push('Docker is not available. Ensure Docker Desktop is running and docker is in PATH.');
-  }
-
-  if (distro && dockerAvailable) {
-    const integration = checkWslIntegration(distro);
-    checks.push(`WSL Docker integration: ${integration ? 'enabled' : 'disabled'}`);
-    if (!integration) {
-      issues.push('Docker integration is not enabled for the WSL distro.');
+  // GC dry report.
+  if (published) {
+    const root = isInsideWsl() ? path.join(process.env.HOME, '.pix') : null;
+    if (root && fs.existsSync(root)) {
+      const current = readPublishedBody(ctx);
+      out(`  note: GC would protect current release ${current.manifest.bodyRevision.slice(0, 12)} and referenced installs/workspaces/sessions.`);
     }
   }
 
-  const sourceWorkspace = cwd;
-  const agentDir = resolveAgentDir(config, process.env.HOME);
-  checks.push(`Workspace source: ${sourceWorkspace}`);
-  checks.push(`Agent dir: ${agentDir}`);
-
-  if (isNtfsWorkspace(sourceWorkspace)) {
-    if (config.workspace?.projection !== false) {
-      checks.push('Workspace projection: enabled');
-    } else {
-      issues.push('Workspace is on Windows NTFS and projection is disabled. Sandbox file operations may be slower.');
-    }
-  }
-  if (isNtfsWorkspace(agentDir)) {
-    issues.push('Agent dir is on Windows NTFS. Direct/Sandbox shared runtime performance may suffer.');
-  }
-
-  if (config.workspace?.projection !== false && isNtfsWorkspace(sourceWorkspace)) {
-    const projectionRoot = expandTilde(config.workspace?.projectionRoot || '~/.pix/workspaces', process.env.HOME);
-    checks.push(`Projection root: ${projectionRoot}`);
-    checks.push(`rsync available: ${hasRsync() ? 'yes' : 'no (will use cp)'}`);
-
-    if (isNtfsWorkspace(projectionRoot)) {
-      issues.push('Projection root is on Windows NTFS. This defeats the purpose of workspace projection.');
-    }
-
-    try {
-      fs.mkdirSync(projectionRoot, { recursive: true });
-      fs.accessSync(projectionRoot, fs.constants.R_OK | fs.constants.W_OK);
-      checks.push('Projection root writable: yes');
-    } catch {
-      issues.push(`Projection root is not readable/writable: ${projectionRoot}`);
-    }
-  }
-
-  if (isSyncEnabled(config)) {
-    const mutagenPath = resolveMutagenPath();
-    checks.push(`Mutagen available: ${mutagenPath ? 'yes' : 'no (install Mutagen to enable continuous sync)'}`);
-    if (mutagenPath) {
-      checks.push(`Mutagen version: ${getMutagenVersion(mutagenPath) || 'unknown'}`);
-      try {
-        const staleSessions = listPixSessions(mutagenPath);
-        checks.push(`Stale pix Mutagen sessions: ${staleSessions.length}`);
-        if (staleSessions.length > 0) {
-          warn(`Found ${staleSessions.length} stale pix Mutagen session(s): ${staleSessions.join(', ')}`);
-        }
-      } catch (err) {
-        warn(`Failed to list Mutagen sessions: ${err.message}`);
-      }
-    }
-  }
-
-  try {
-    fs.accessSync(agentDir, fs.constants.R_OK | fs.constants.W_OK);
-    checks.push(`Runtime read-write: yes`);
-  } catch {
-    issues.push(`Runtime directory is not readable/writable: ${agentDir}`);
-    checks.push(`Runtime read-write: no`);
-  }
-
-  const piAvailable = distro ? hasCommand('pi', distro) : false;
-  checks.push(`pi command: ${piAvailable ? 'available' : 'missing'}`);
-  if (!piAvailable) {
-    issues.push('pi is not installed in WSL. Direct mode will not work.');
-  }
-
-  const imageName = config.container?.image || 'pix-pi-sandbox';
-  const imageAvailable = dockerAvailable && imageExists(imageName);
-  checks.push(`Sandbox image: ${imageName} (${imageAvailable ? 'present' : 'missing'})`);
-  if (!imageAvailable) {
-    issues.push('Sandbox image is missing. Run pix --sandbox --rebuild to build it.');
-  }
-
-  if (piAvailable && imageAvailable) {
-    const wslVersion = getPiVersionWsl(distro);
-    const dockerVersion = getPiVersionDocker(imageName);
-    checks.push(`Pi version (WSL): ${wslVersion || 'unknown'}`);
-    checks.push(`Pi version (image): ${dockerVersion || 'unknown'}`);
-    if (wslVersion && dockerVersion && wslVersion !== dockerVersion) {
-      issues.push(`Direct and Sandbox pi versions differ: ${wslVersion} vs ${dockerVersion}`);
-    }
-  }
-
-  if (imageAvailable) {
-    const mountable = canMountRuntime(agentDir, imageName);
-    checks.push(`Docker can mount runtime: ${mountable === null ? 'n/a' : mountable ? 'yes' : 'no'}`);
-    if (mountable === false) {
-      issues.push('Docker cannot mount the runtime directory.');
-    }
-  }
-
-  for (const message of configWarnings) {
-    warn(message);
-  }
-
-  console.log('Checks:');
-  for (const check of checks) {
-    console.log(`  ${check}`);
-  }
-
-  if (issues.length) {
-    console.log('\nIssues:');
-    for (const issue of issues) {
-      console.log(`  - ${issue}`);
-    }
+  if (problems.length === 0) {
+    out('No problems found.');
+  } else {
+    out(`${problems.length} problem(s) found.`);
     return 1;
   }
-
-  console.log('\nNo issues detected.');
   return 0;
+}
+
+function check(out, problems, ok, okMessage, problemMessage) {
+  if (ok) {
+    out(`  ok: ${okMessage}`);
+  } else {
+    problems.push(problemMessage);
+    out(`  PROBLEM: ${problemMessage}`);
+  }
 }
 
 module.exports = { execute };

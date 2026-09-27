@@ -118,10 +118,54 @@ function mirrorBackWorkspace(projectedPath, sourcePath, config, options = {}) {
   }
 }
 
+/**
+ * Baseline-diff report between the projected execution copy and the Windows
+ * source. Used by the review-collect writeback policy: never auto-overwrite,
+ * always report. Delete/rename/type changes are reported as deletions +
+ * additions; real three-way merge is out of scope by design.
+ */
+function diffWorkspace(projectedPath, sourcePath, excludes = []) {
+  const projected = snapshotFiles(projectedPath, excludes);
+  const source = snapshotFiles(sourcePath, excludes);
+  const added = [];
+  const modified = [];
+  const deleted = [];
+  for (const [rel, digest] of projected) {
+    if (!source.has(rel)) added.push(rel);
+    else if (source.get(rel) !== digest) modified.push(rel);
+  }
+  for (const rel of source.keys()) {
+    if (!projected.has(rel)) deleted.push(rel);
+  }
+  return { added: added.sort(), modified: modified.sort(), deleted: deleted.sort() };
+}
+
+function snapshotFiles(root, excludes) {
+  const map = new Map();
+  if (!fs.existsSync(root)) return map;
+  const skip = new Set(excludes || []);
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (skip.has(entry.name)) continue;
+      if (entry.name === '.pix-state.json') continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) {
+        const rel = path.relative(root, full).split(path.sep).join('/');
+        const digest = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+        map.set(rel, digest);
+      }
+    }
+  })(root);
+  return map;
+}
+
 module.exports = {
   detectCopyTool,
   isProjectionNeeded,
   resolveProjectedPath,
+  computeProjectionId,
   projectWorkspace,
   mirrorBackWorkspace,
+  diffWorkspace,
 };

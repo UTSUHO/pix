@@ -11,6 +11,25 @@ const DEPRECATED_KEYS = [
   'pi',
 ];
 
+/**
+ * Privileged keys a project checkout may never set. Project config can only
+ * request or tighten — never widen — the sandbox boundary.
+ */
+const PROJECT_FORBIDDEN_PATHS = [
+  ['security'],
+  ['container', 'extraRunOptions'],
+  ['container', 'dockerfile'],
+];
+
+function getPath(obj, pathArr) {
+  let cur = obj;
+  for (const key of pathArr) {
+    if (!cur || typeof cur !== 'object') return undefined;
+    cur = cur[key];
+  }
+  return cur;
+}
+
 function collectWarnings(userConfig, projectConfig) {
   const warnings = [];
   const configs = [userConfig, projectConfig];
@@ -21,8 +40,28 @@ function collectWarnings(userConfig, projectConfig) {
       }
     }
   }
-  if (projectConfig && Object.prototype.hasOwnProperty.call(projectConfig, 'security')) {
-    warnings.push('Project .pix.json cannot set "security" keys (policy settings are user-level only). Ignored.');
+  if (projectConfig) {
+    if (Object.prototype.hasOwnProperty.call(projectConfig, 'security')) {
+      warnings.push('Project .pix.json cannot set "security" keys (policy settings are user-level only). Ignored.');
+    }
+    for (const p of PROJECT_FORBIDDEN_PATHS) {
+      if (getPath(projectConfig, p) !== undefined) {
+        warnings.push(`Project .pix.json cannot set "${p.join('.')}" (privileged, user-level only). Ignored.`);
+      }
+    }
+    const projectNetwork = getPath(projectConfig, ['container', 'network']);
+    if (projectNetwork && projectNetwork !== 'none') {
+      warnings.push(`Project .pix.json cannot widen container.network to "${projectNetwork}" (only "none" is allowed project-side). Ignored.`);
+    }
+    // envAllowlist: project may narrow, never widen.
+    const userList = (userConfig && userConfig.envAllowlist) || DEFAULTS.envAllowlist;
+    const projectList = projectConfig.envAllowlist;
+    if (Array.isArray(projectList)) {
+      const widening = projectList.filter((k) => !userList.includes(k));
+      if (widening.length) {
+        warnings.push(`Project .pix.json tried to add env vars beyond the user allowlist: ${widening.join(', ')}. Ignored.`);
+      }
+    }
   }
   return warnings;
 }
@@ -49,27 +88,42 @@ function mergeDeep(target, source) {
   return result;
 }
 
-function mergeConfig({ user, project }, cliOverrides = {}) {
-  // Security policy must never be silently influenced by a project checkout.
-  const safeProject = project ? { ...project } : project;
-  if (safeProject) {
-    delete safeProject.security;
+/** Remove privileged keys from a project config before merging. */
+function sanitizeProjectConfig(project) {
+  if (!project) return project;
+  const safe = JSON.parse(JSON.stringify(project));
+  delete safe.security;
+  if (safe.container) {
+    delete safe.container.extraRunOptions;
+    delete safe.container.dockerfile;
+    if (safe.container.network && safe.container.network !== 'none') {
+      delete safe.container.network;
+    }
   }
+  return safe;
+}
+
+function mergeConfig({ user, project }, cliOverrides = {}) {
+  const safeProject = sanitizeProjectConfig(project);
 
   const base = mergeDeep(DEFAULTS, user);
   const withProject = mergeDeep(base, safeProject);
 
-  const allowlist = new Set([
-    ...(base.envAllowlist || DEFAULTS.envAllowlist),
-    ...(safeProject?.envAllowlist || []),
-  ]);
+  // envAllowlist: project can only NARROW the user allowlist (intersection),
+  // never widen it. An untrusted checkout must not exfiltrate new variables
+  // into the container.
+  const userAllowlist = (user && user.envAllowlist) || DEFAULTS.envAllowlist;
+  let effectiveAllowlist = [...userAllowlist];
+  if (safeProject && Array.isArray(safeProject.envAllowlist)) {
+    effectiveAllowlist = userAllowlist.filter((k) => safeProject.envAllowlist.includes(k));
+  }
 
   const result = mergeDeep(withProject, cliOverrides);
-  result.envAllowlist = Array.from(allowlist);
+  result.envAllowlist = effectiveAllowlist;
 
   const warnings = collectWarnings(user, project);
 
   return { config: result, warnings };
 }
 
-module.exports = { mergeConfig, collectWarnings };
+module.exports = { mergeConfig, collectWarnings, sanitizeProjectConfig };
