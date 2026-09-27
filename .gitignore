@@ -11,3 +11,4 @@ node-image.tar
 spawn-output.txt
 status-output.txt
 .claude/
+.pix-state.json
